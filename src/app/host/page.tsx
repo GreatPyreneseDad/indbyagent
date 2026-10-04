@@ -6,6 +6,14 @@ import { supaBrowser } from "@/lib/supabase-browser";
 type Api = (path: string, init?: RequestInit) => Promise<any>;
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type SuggestedPoll = { question: string; options: string[] };
+type VenueSuggestion = {
+  id: string; status: "pending" | "confirmed" | "rejected"; target_time: string; mock: boolean;
+  venue: { name: string; address: string; url: string | null; why: string; capacity_fit: string; est_cost: string | null };
+  availability: { status: "open" | "closed" | "unknown"; evidence: string; booking_url: string | null };
+  invitees: { available: string[]; unavailable: string[]; unknown: string[] };
+  vendors: { category: string; name: string; url: string | null; why: string }[];
+  sources: string[];
+};
 
 // Mirrors the server's db fallback (lib/fallback.ts): no Supabase locally means
 // no sign-in, and the server treats every request as the local test host.
@@ -185,6 +193,7 @@ export default function Host() {
           </section>
 
           <Planner partyId={board.party.id} api={api} onChange={refresh} />
+          <VenueAgent partyId={board.party.id} timezone={board.party.timezone} api={api} />
 
           <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {[["Invited", s.invited], ["Yes", s.yes], ["Headcount", s.headcount], ["Waiting on human", s.needs_human], ["Pending", s.pending]].map(([k, v]) => (
@@ -366,6 +375,93 @@ function Planner({ partyId, api, onChange }: { partyId: string; api: Api; onChan
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+// The venue agent: searches for a venue open at the likely party time, says
+// which invitees can make it, and waits for the host to confirm or reject.
+function VenueAgent({ partyId, timezone, api }: { partyId: string; timezone: string; api: Api }) {
+  const [list, setList] = useState<VenueSuggestion[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const load = useCallback(async () => {
+    try { setList((await api(`/api/host/parties/${partyId}/venues`)).suggestions); } catch (e) { setErr((e as Error).message); }
+  }, [api, partyId]);
+  useEffect(() => { setList([]); setNotice(""); setErr(""); load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
+
+  const search = async () => {
+    setBusy(true); setErr(""); setNotice("");
+    try {
+      const j = await api(`/api/host/parties/${partyId}/venues`, { method: "POST", body: "{}" });
+      setNotice(j.notice?.notified === "email" ? `Suggestion emailed to ${j.notice.to}.` : j.notice?.notified === "console" ? `Notification for ${j.notice.to} printed to the server console (email not configured).` : "");
+      await load();
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const decide = async (s: VenueSuggestion, decision: "confirm" | "reject") => {
+    setErr("");
+    try { await api(`/api/host/parties/${partyId}/venues/${s.id}`, { method: "POST", body: JSON.stringify({ decision }) }); await load(); }
+    catch (e) { setErr((e as Error).message); }
+  };
+
+  const pending = list.filter((s) => s.status === "pending");
+  const confirmed = list.find((s) => s.status === "confirmed");
+  const decided = list.filter((s) => s.status !== "pending");
+  const avail = { open: ["text-emerald-400", "Open then"], closed: ["text-red-400", "Closed then"], unknown: ["text-amber-300", "Hours unknown"] } as const;
+  return (
+    <section className="rounded-lg border border-neutral-800 p-4 space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <h3 className="font-semibold">Venue &amp; vendors</h3>
+        {pending.length > 0 && <span className="rounded-full bg-rose-600 px-2 py-0.5 text-xs font-medium text-white">{pending.length} waiting for you</span>}
+        {confirmed && <span className="text-sm text-emerald-400">Confirmed: {confirmed.venue.name}</span>}
+        <button onClick={search} disabled={busy} className="ml-auto rounded-md bg-white text-neutral-900 px-4 py-2 text-sm font-medium disabled:opacity-50">{busy ? "Searching…" : list.length ? "Find another venue" : "Find a venue"}</button>
+      </div>
+      {busy && <p className="text-xs text-neutral-500">The agent is searching venues and checking hours for the party time. This can take a minute.</p>}
+      {notice && <p className="text-sm text-neutral-400">{notice}</p>}
+      {err && <p className="text-sm text-red-400">{err}</p>}
+      {pending.map((s) => (
+        <div key={s.id} className="rounded-lg border border-rose-900/60 p-4 space-y-3">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <div className="text-lg font-semibold">{s.venue.url ? <a href={s.venue.url} target="_blank" className="underline decoration-rose-500">{s.venue.name}</a> : s.venue.name}</div>
+            <div className="text-sm text-neutral-400">{s.venue.address}</div>
+            {s.mock && <span className="text-xs text-amber-300">mock result (no Claude key)</span>}
+          </div>
+          <div className="text-sm text-neutral-300">{s.venue.why}</div>
+          <div className="text-sm text-neutral-400">{s.venue.capacity_fit}{s.venue.est_cost ? ` · ${s.venue.est_cost}` : ""}</div>
+          <div className="grid sm:grid-cols-2 gap-3 text-sm">
+            <div className="rounded-md bg-neutral-900 p-3 space-y-1">
+              <div className="text-xs uppercase tracking-[.14em] text-neutral-500">{fmtDate(s.target_time, timezone)}</div>
+              <div className={avail[s.availability.status][0]}>{avail[s.availability.status][1]}</div>
+              <div className="text-neutral-400">{s.availability.evidence}</div>
+              <div className="text-xs text-neutral-500">Booking not confirmed. {s.availability.booking_url && <a href={s.availability.booking_url} target="_blank" className="underline">Book or ask</a>}</div>
+            </div>
+            <div className="rounded-md bg-neutral-900 p-3 space-y-1">
+              <div className="text-xs uppercase tracking-[.14em] text-neutral-500">Invitees at that time</div>
+              <div><span className="text-emerald-400">Can make it ({s.invitees.available.length}):</span> {s.invitees.available.join(", ") || "—"}</div>
+              <div><span className="text-red-400">Can&apos;t ({s.invitees.unavailable.length}):</span> {s.invitees.unavailable.join(", ") || "—"}</div>
+              <div><span className="text-neutral-500">Haven&apos;t said ({s.invitees.unknown.length}):</span> {s.invitees.unknown.join(", ") || "—"}</div>
+            </div>
+          </div>
+          {s.vendors.length > 0 && (
+            <div className="text-sm space-y-1">
+              <div className="text-xs uppercase tracking-[.14em] text-neutral-500">Vendors to consider</div>
+              {s.vendors.map((v) => <div key={v.name}><span className="text-neutral-500">{v.category}:</span> {v.url ? <a href={v.url} target="_blank" className="underline">{v.name}</a> : v.name} <span className="text-neutral-400">· {v.why}</span></div>)}
+            </div>
+          )}
+          {s.sources.length > 0 && <div className="text-xs text-neutral-500 truncate">Sources: {s.sources.map((u) => <a key={u} href={u} target="_blank" className="underline mr-2">{u.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}</a>)}</div>}
+          <div className="flex gap-2">
+            <button onClick={() => decide(s, "confirm")} className="rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 text-sm font-medium">Confirm venue</button>
+            <button onClick={() => decide(s, "reject")} className="rounded-md border border-neutral-700 px-4 py-2 text-sm">Reject</button>
+          </div>
+        </div>
+      ))}
+      {decided.length > 0 && (
+        <div className="text-xs text-neutral-500">{decided.map((s) => `${s.venue.name}: ${s.status}`).join(" · ")}</div>
+      )}
+      {!list.length && !busy && <p className="text-sm text-neutral-500">The agent will suggest a venue open at the party time (the leading date if guests are ranking dates) and show which invitees can make it.</p>}
     </section>
   );
 }
