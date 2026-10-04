@@ -32,6 +32,7 @@ export default function Host() {
 
   // On load: if a session cookie exists, we're in.
   useEffect(() => {
+    if (window.location.hash.includes("access_token")) return; // SessionCatch handles this and reloads
     (async () => {
       try {
         const { data: { user } } = await supaBrowser().auth.getUser();

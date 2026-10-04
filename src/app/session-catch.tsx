@@ -8,12 +8,12 @@ export default function SessionCatch() {
   useEffect(() => {
     if (!window.location.hash.includes("access_token")) return;
     const supa = supaBrowser();
-    const { data: sub } = supa.auth.onAuthStateChange((evt) => {
-      if (evt === "SIGNED_IN" || evt === "INITIAL_SESSION") {
-        sub.subscription.unsubscribe();
-        window.history.replaceState(null, "", window.location.pathname);
-        if (window.location.pathname !== "/host") window.location.assign("/host");
-      }
+    const { data: sub } = supa.auth.onAuthStateChange((evt, session) => {
+      if (!session) return;
+      sub.subscription.unsubscribe();
+      window.history.replaceState(null, "", window.location.pathname);
+      if (window.location.pathname !== "/host") window.location.assign("/host");
+      else window.location.reload();
     });
   }, []);
   return null;
