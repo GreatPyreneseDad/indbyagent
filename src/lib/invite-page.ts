@@ -1,4 +1,4 @@
-import { fmtWhen, inviteText, SPEC_VERSION, type InviteCtx } from "./invite";
+import { fmtDate, fmtWhen, inviteText, SPEC_VERSION, type InviteCtx } from "./invite";
 import { siteUrl } from "./token";
 
 const esc = (s: string | null | undefined) =>
@@ -16,7 +16,9 @@ h1{margin:0;font-size:clamp(28px,6vw,40px);line-height:1.1;letter-spacing:-.02em
 button,.btn{appearance:none;border:1px solid var(--line);background:#1d191b;color:var(--fg);padding:10px 16px;border-radius:8px;font:inherit;cursor:pointer}
 button.primary{background:var(--rose);border-color:var(--rose);color:#fff}
 button:focus-visible,a:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
-input,textarea{width:100%;background:#0f0e0f;border:1px solid var(--line);color:var(--fg);padding:9px 11px;border-radius:8px;font:inherit}
+.rank{display:flex;align-items:center;gap:12px;color:var(--fg);font-size:15px}.rank select{width:auto;min-width:64px}
+.notice{border-color:var(--rose);padding:10px 14px;font-size:14px}
+input,textarea,select{width:100%;background:#0f0e0f;border:1px solid var(--line);color:var(--fg);padding:9px 11px;border-radius:8px;font:inherit}
 label{display:grid;gap:5px;font-size:13px;color:var(--mut)}
 .status{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:#1d191b;font-size:14px}
 .status.yes{color:var(--ok)}.status.no{color:#f87171}.status.maybe,.status.needs_human{color:#fbbf24}
@@ -25,17 +27,29 @@ pre{margin:0;overflow-x:auto;background:#0f0e0f;border:1px solid var(--line);bor
 .small{font-size:13px;color:var(--mut)}a{color:var(--fg);text-decoration-color:var(--rose);text-underline-offset:3px}
 `;
 
-export function renderInvitePage(ctx: InviteCtx | null, token: string): string {
+export function renderInvitePage(ctx: InviteCtx | null, token: string, notice?: string): string {
   if (!ctx) {
     return page("Invite not found", `<div class="wrap"><div class="eyebrow">IndbyAgent</div><h1>This invite link isn't valid.</h1><p class="small">It may have been revoked or mistyped. Ask the host for a fresh link.</p></div>`);
   }
-  const { party, guest, state, polls, answers } = ctx;
+  const { party, guest, state, polls, answers, lockedPolls } = ctx;
   const base = `${siteUrl()}/i/${token}`;
   const status = state.status ?? "pending";
   const byLine = state.by_kind ? ` · answered by ${state.by_kind === "agent" ? `${esc(state.by_name) || "an agent"} (agent)` : "you"}` : "";
 
   const pollsHtml = polls.map((p) => {
     const a = answers.find((x) => x.poll_id === p.id);
+    if (p.kind === "date_rank") {
+      const rankOf = (o: string) => (a?.ranking ?? []).indexOf(o) + 1;
+      return `<form class="card" method="post" action="${base}/polls/${p.id}">
+      <div class="small">Date poll · ranked choice</div><div style="font-weight:600;margin:2px 0 4px">${esc(p.question)}</div>
+      <p class="small" style="margin:0 0 10px">Rank the dates that work for you (1 = best). Leave a date blank if you can't make it.</p>
+      <div style="display:grid;gap:8px">${p.options.map((o, i) => `<label class="rank">
+        <select name="rank_${i}"><option value="">—</option>${p.options.map((_, r) => `<option value="${r + 1}"${rankOf(o) === r + 1 ? " selected" : ""}>${r + 1}</option>`).join("")}</select>
+        <span>${esc(fmtDate(o, party.timezone))}</span></label>`).join("")}</div>
+      <div class="row" style="margin-top:12px;align-items:center"><button class="primary">Save ranking</button>
+      ${a?.ranking?.length ? `<span class="small">Saved${a.by_kind === "agent" ? " by your agent" : ""}: ${a.ranking.map((o) => esc(fmtDate(o, party.timezone))).join(" › ")}</span>` : ""}</div>
+    </form>`;
+    }
     return `<form class="card" method="post" action="${base}/polls/${p.id}">
       <div class="small">Poll</div><div style="font-weight:600;margin:2px 0 10px">${esc(p.question)}</div>
       <div class="row">${p.options.map((o) => `<button name="choice" value="${esc(o)}" class="${a?.choice === o ? "primary" : ""}">${esc(o)}</button>`).join("")}</div>
@@ -45,6 +59,7 @@ export function renderInvitePage(ctx: InviteCtx | null, token: string): string {
 
   const body = `
 <div class="wrap">
+  ${notice ? `<div class="card notice" role="status">${esc(notice)}</div>` : ""}
   <div class="eyebrow">You're invited</div>
   <h1>${esc(party.title)}</h1>
   <div class="meta">
@@ -73,6 +88,7 @@ export function renderInvitePage(ctx: InviteCtx | null, token: string): string {
   </form>
 
   ${pollsHtml}
+  ${lockedPolls ? `<div class="card small">The host has ${lockedPolls} quick poll${lockedPolls > 1 ? "s" : ""} for guests who are coming. RSVP yes to see ${lockedPolls > 1 ? "them" : "it"}.</div>` : ""}
 
   <form class="card" method="post" action="${base}/message">
     <label>Ask the host something<textarea name="text" rows="2" placeholder="Can siblings come?"></textarea></label>

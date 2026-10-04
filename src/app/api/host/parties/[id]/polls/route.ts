@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { unauthorized, forbidden, PollCreateBody } from "@/lib/host";
+import { unauthorized, forbidden, PollCreateBody, dateOptions } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { parseBody } from "@/lib/http";
 
@@ -13,7 +13,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const p = await parseBody(req, PollCreateBody);
   if ("res" in p) return p.res;
-  const { data, error } = await db.from("polls").insert({ party_id: id, ...p.data }).select().single();
+  const body = p.data.kind === "date_rank" ? { ...p.data, options: dateOptions(p.data.options) } : p.data;
+  const { data, error } = await db.from("polls").insert({ party_id: id, ...body }).select().single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json({ poll: data }, { status: 201 });
 }

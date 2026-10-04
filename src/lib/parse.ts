@@ -43,7 +43,7 @@ export function fastParse(text: string, polls: Poll[]): Parsed | null {
   return out;
 }
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+export const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 export const MODEL = "claude-sonnet-5-5";
 
 export async function llmParse(opts: { text: string; guestName: string; partySizeMax: number; polls: Poll[]; partyId: string; purpose: string }): Promise<Parsed> {

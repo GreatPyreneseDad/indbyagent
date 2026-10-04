@@ -17,6 +17,7 @@ export type Party = {
   id: string; host_id: string; slug: string; title: string; kind: string | null;
   starts_at: string; ends_at: string | null; timezone: string; location: string | null;
   details: string | null; rsvp_by: string | null; inbox_address: string | null;
+  planning: Record<string, string>;
 };
 export type Guest = {
   id: string; party_id: string; name: string; email: string | null; phone: string | null;
@@ -27,5 +28,7 @@ export type GuestState = {
   status: RsvpStatus | null; party_size: number | null; dietary: string[] | null; note: string | null;
   by_kind: ByKind | null; by_name: string | null; channel: Channel | null; answered_at: string | null;
 };
-export type Poll = { id: string; party_id: string; question: string; options: string[]; closes_at: string | null; status: "open" | "closed" };
-export type PollAnswer = { poll_id: string; guest_id: string; choice: string; note: string | null; by_kind: ByKind; by_name: string | null; channel: Channel; created_at: string };
+export type PollKind = "choice" | "date_rank";
+export type Poll = { id: string; party_id: string; question: string; options: string[]; closes_at: string | null; status: "open" | "closed"; kind: PollKind; created_by: "host" | "agent" };
+export type PollAnswer = { poll_id: string; guest_id: string; choice: string; ranking: string[] | null; note: string | null; by_kind: ByKind; by_name: string | null; channel: Channel; created_at: string };
+export type PlanningMessage = { id: string; party_id: string; role: "user" | "assistant"; text: string; created_at: string };

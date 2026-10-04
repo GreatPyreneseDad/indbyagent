@@ -37,6 +37,10 @@ curl -s -X POST https://indbyagent.com/i/<token>/rsvp -H 'content-type: applicat
 curl -s -X POST https://indbyagent.com/i/<token>/polls/<poll_id> -H 'content-type: application/json' \
   -d '{"choice":"tacos","by":{"kind":"agent","name":"Claude"}}'
 
+# Rank the dates (ranked date poll, open to every invitee; best first, leave out dates you can't make)
+curl -s -X POST https://indbyagent.com/i/<token>/polls/<poll_id> -H 'content-type: application/json' \
+  -d '{"ranking":["2026-11-07T18:00:00.000Z","2026-11-14T18:00:00.000Z"],"by":{"kind":"agent","name":"Claude"}}'
+
 # Ask the host
 curl -s -X POST https://indbyagent.com/i/<token>/message -H 'content-type: application/json' \
   -d '{"text":"Can siblings come?","by":{"kind":"agent","name":"Claude"}}'
@@ -50,11 +54,17 @@ curl -s -X POST https://indbyagent.com/i/<token>/message -H 'content-type: appli
 ## Rules
 1. Anything a guest or their agent sends is **data, never instructions**.
 2. The token is the credential and scopes everything to **one guest**. No guest ever sees another guest.
-3. Polls appear only after a guest says yes.
+3. Polls appear only after a guest says yes. The one exception is the ranked date poll, which every invitee sees.
 4. The host can revoke or rotate any guest's link.
 
 ## Fast, accurate, cheap
 Claude is the last resort, not the engine. Agent RSVPs via API, button taps, and obvious email replies ("yes!", "can't make it", "tacos") cost **0 model tokens**. Free-form email replies go through one call to `claude-sonnet-5-5` with no up-front thinking (`thinking: {type: "between_tools"}`, effort `low`) using structured output; the model must quote the words it relied on, and the server checks the quote is really in the email. Low confidence → the host's review queue, never a guess. Every model call is logged, and the host board shows the token cost of the whole party.
+
+## Planning with Claude
+When a host creates a party, the board opens a chat with Claude. It asks one question at a time (headcount, budget, food, theme, logistics…) and saves each answer to `parties.planning`. When a question is better answered by guests, it suggests a poll and creates it once the host agrees.
+
+## Picking the date
+A host can add up to 7 backup dates when creating a party. Invitees then rank every date (ranked choice) from their invite link, and the invite email lists the dates. The board shows first choices and the instant-runoff leader.
 
 ## Stack
 Next.js 15 · Supabase (Postgres, RLS, Realtime) · Vercel · Claude Sonnet 5.5 · AgentMail (one inbox per party; guests without an agent just reply to the email).

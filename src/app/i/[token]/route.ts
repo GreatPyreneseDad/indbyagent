@@ -21,5 +21,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   if (fmt === "json") return NextResponse.json(inviteJson(ctx, token), { headers: cache });
   if (fmt === "txt") return new NextResponse(inviteText(ctx, token), { headers: { ...cache, "content-type": "text/plain; charset=utf-8" } });
   if (fmt === "ics") return new NextResponse(inviteIcs(ctx, token), { headers: { "content-type": "text/calendar; charset=utf-8", "content-disposition": `attachment; filename="${ctx.party.slug}.ics"` } });
-  return new NextResponse(renderInvitePage(ctx, token), { headers: { ...cache, "content-type": "text/html; charset=utf-8" } });
+  const q = req.nextUrl.searchParams;
+  const notice = q.get("error") === "rank" ? "Pick a rank for at least one date, then save." : q.get("saved") ? "Saved." : undefined;
+  return new NextResponse(renderInvitePage(ctx, token, notice), { headers: { ...cache, "content-type": "text/html; charset=utf-8" } });
 }

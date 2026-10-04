@@ -11,7 +11,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const ct = req.headers.get("content-type") ?? "";
   if (ct.includes("form")) {
     const f = await req.formData();
-    const body = PollBody.safeParse({ choice: f.get("choice"), note: String(f.get("note") ?? ""), by: { kind: "human" } });
+    const poll = ctx.polls.find((p) => p.id === pollId);
+    // Ranked date polls post rank_<option index> = 1..n, blank for "can't make it".
+    const ranking = poll?.kind === "date_rank"
+      ? poll.options.map((o, i) => ({ o, r: Number(f.get(`rank_${i}`)) })).filter((x) => x.r > 0).sort((a, b) => a.r - b.r).map((x) => x.o)
+      : undefined;
+    if (ranking && !ranking.length) return NextResponse.redirect(new URL(`/i/${token}?error=rank`, req.url), 303);
+    const body = PollBody.safeParse({ choice: ranking ? undefined : f.get("choice"), ranking, note: String(f.get("note") ?? ""), by: { kind: "human" } });
     if (!body.success) return NextResponse.json({ error: "invalid" }, { status: 400 });
     const r = await writePollAnswer(ctx, pollId, body.data, { channel: "web", defaultKind: "human" });
     if ("error" in r) return NextResponse.json(r, { status: 400 });

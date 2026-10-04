@@ -15,6 +15,8 @@ export const PartyBody = z.object({
   location: z.string().trim().max(200).optional(),
   details: z.string().trim().max(1000).optional(),
   rsvp_by: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // Alternatives to starts_at. When given, invitees rank all the dates.
+  backup_dates: z.array(z.string().datetime({ offset: true })).max(7).optional(),
 });
 export const GuestsBody = z.object({
   guests: z.array(z.object({
@@ -25,9 +27,17 @@ export const GuestsBody = z.object({
 });
 export const PollCreateBody = z.object({
   question: z.string().trim().min(1).max(200),
+  kind: z.enum(["choice", "date_rank"]).default("choice"),
   options: z.array(z.string().trim().min(1).max(60)).min(2).max(8),
   closes_at: z.string().datetime({ offset: true }).optional(),
-});
+}).refine((p) => p.kind !== "date_rank" || p.options.every((o) => !Number.isNaN(Date.parse(o))), { message: "date_rank options must be ISO datetimes", path: ["options"] });
+
+export const DATE_POLL_QUESTION = "Which date works best for you?";
+
+// Canonical ISO options, deduped, in the order given.
+export function dateOptions(dates: string[]): string[] {
+  return [...new Set(dates.map((d) => new Date(d).toISOString()))];
+}
 
 export function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40) + "-" + Math.random().toString(36).slice(2, 6);

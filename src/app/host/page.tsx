@@ -2,11 +2,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supaBrowser } from "@/lib/supabase-browser";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Api = (path: string, init?: RequestInit) => Promise<any>;
+type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+
 type Board = {
-  party: { id: string; title: string; starts_at: string; location: string | null; inbox_address: string | null };
+  party: { id: string; title: string; starts_at: string; timezone: string; location: string | null; inbox_address: string | null; planning: Record<string, string> };
   summary: { invited: number; yes: number; no: number; maybe: number; needs_human: number; pending: number; headcount: number; by_agent: number; by_human: number };
   guests: { guest_id: string; name: string; email: string | null; status: string | null; party_size: number | null; dietary: string[] | null; note: string | null; by_kind: string | null; by_name: string | null; channel: string | null; answered_at: string | null }[];
-  polls: { id: string; question: string; options: string[]; status: string; counts: Record<string, number>; answers: { guest_id: string; choice: string; by_kind: string; by_name: string | null; channel: string }[] }[];
+  polls: { id: string; question: string; kind: "choice" | "date_rank"; created_by: "host" | "agent"; options: string[]; status: string; counts: Record<string, number>; runoff: { winner: string | null; tied: string[]; rounds: Record<string, number>[] } | null; answers: { guest_id: string; choice: string; ranking: string[] | null; by_kind: string; by_name: string | null; channel: string }[] }[];
   messages: { id: string; guest_id: string | null; direction: string; text: string; by_kind: string; by_name: string | null; channel: string; created_at: string }[];
   tokens: { in: number; cached: number; out: number };
 };
@@ -23,6 +27,7 @@ export default function Host() {
   const [links, setLinks] = useState<{ name: string; invite_url: string }[]>([]);
   const [join, setJoin] = useState<{ join_url: string; screen_url: string } | null>(null);
   const [err, setErr] = useState("");
+  const [backups, setBackups] = useState<number[]>([]);
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const r = await fetch(path, { ...init, credentials: "same-origin", headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
@@ -70,9 +75,10 @@ export default function Host() {
   const createParty = async (f: FormData) => {
     setErr("");
     const starts = new Date(String(f.get("starts_at"))).toISOString();
+    const backup_dates = f.getAll("backup_dates").map(String).filter(Boolean).map((d) => new Date(d).toISOString());
     try {
-      const j = await api("/api/host/parties", { method: "POST", body: JSON.stringify({ title: f.get("title"), starts_at: starts, location: f.get("location") || undefined, details: f.get("details") || undefined, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }) });
-      setParties((p) => [j.party, ...p]); setPartyId(j.party.id);
+      const j = await api("/api/host/parties", { method: "POST", body: JSON.stringify({ title: f.get("title"), starts_at: starts, backup_dates: backup_dates.length ? backup_dates : undefined, location: f.get("location") || undefined, details: f.get("details") || undefined, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }) });
+      setParties((p) => [j.party, ...p]); setPartyId(j.party.id); setBackups([]);
     } catch (e) { setErr((e as Error).message); }
   };
   const addGuests = async (f: FormData) => {
@@ -142,7 +148,21 @@ export default function Host() {
         <form action={createParty} className="grid gap-3 max-w-lg rounded-lg border border-neutral-800 p-4">
           <h2 className="font-semibold">New party</h2>
           <input name="title" required placeholder="Maya's 6th Birthday" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
-          <input name="starts_at" type="datetime-local" required className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
+          <label className="grid gap-1 text-xs text-neutral-500">Date
+            <input name="starts_at" type="datetime-local" required className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-base text-neutral-100" />
+          </label>
+          {backups.map((k, i) => (
+            <div key={k} className="flex gap-2 items-end">
+              <label className="grid gap-1 flex-1 text-xs text-neutral-500">Backup date {i + 1}
+                <input name="backup_dates" type="datetime-local" required className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-base text-neutral-100" />
+              </label>
+              <button type="button" onClick={() => setBackups((b) => b.filter((x) => x !== k))} className="rounded-md border border-neutral-700 px-3 py-2 text-sm">Remove</button>
+            </div>
+          ))}
+          {backups.length < 7 && (
+            <button type="button" onClick={() => setBackups((b) => [...b, Date.now()])} className="text-sm text-left text-rose-400 underline w-fit">+ Add a backup date</button>
+          )}
+          {backups.length > 0 && <p className="text-xs text-neutral-500">Invitees will rank all {backups.length + 1} dates (ranked choice) from their invite link.</p>}
           <input name="location" placeholder="Dolores Park playground" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
           <textarea name="details" placeholder="Dinosaur theme. Pizza and cake." className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
           <button className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium w-fit">Create</button>
@@ -155,6 +175,8 @@ export default function Host() {
             <h1 className="text-3xl font-bold tracking-tight">{board.party.title}</h1>
             <div className="text-neutral-400 text-sm">{new Date(board.party.starts_at).toLocaleString()} {board.party.location ? `· ${board.party.location}` : ""} {board.party.inbox_address ? `· ${board.party.inbox_address}` : ""}</div>
           </section>
+
+          <Planner partyId={board.party.id} api={api} planning={board.party.planning ?? {}} onChange={refresh} />
 
           <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {[["Invited", s.invited], ["Yes", s.yes], ["Headcount", s.headcount], ["Waiting on human", s.needs_human], ["Pending", s.pending]].map(([k, v]) => (
@@ -189,17 +211,26 @@ export default function Host() {
 
           {board.polls.map((p) => {
             const total = Object.values(p.counts).reduce((a, b) => a + b, 0);
+            const isDate = p.kind === "date_rank";
+            const label = (o: string) => (isDate ? fmtDate(o, board.party.timezone) : o);
+            const r = p.runoff;
             return (
               <section key={p.id} className="rounded-lg border border-neutral-800 p-4 space-y-2">
-                <div className="flex justify-between"><h3 className="font-semibold">{p.question}</h3><span className="text-xs text-neutral-500">{total} answered · {p.status}</span></div>
+                <div className="flex justify-between"><h3 className="font-semibold">{p.question}{isDate && <span className="ml-2 text-xs font-normal text-neutral-500">ranked choice · all invitees</span>}{p.created_by === "agent" && <span className="ml-2 text-xs font-normal text-rose-400">from planning chat</span>}</h3><span className="text-xs text-neutral-500">{total} answered · {p.status}</span></div>
+                {isDate && total > 0 && r && (
+                  <div className="text-sm">
+                    {r.winner ? <>Leading after instant runoff: <b className="text-emerald-400">{label(r.winner)}</b>{r.rounds.length > 1 ? ` (${r.rounds.length} rounds)` : ""}</> : r.tied.length ? <>Tied: {r.tied.map(label).join(" · ")}</> : null}
+                  </div>
+                )}
+                {isDate && <div className="text-xs text-neutral-500">Bars show first choices.</div>}
                 {p.options.map((o) => (
                   <div key={o} className="flex items-center gap-3 text-sm">
-                    <div className="w-28 truncate">{o}</div>
+                    <div className={`${isDate ? "w-56" : "w-28"} truncate`}>{label(o)}</div>
                     <div className="flex-1 h-2 bg-neutral-900 rounded"><div className="h-2 bg-rose-500 rounded" style={{ width: `${total ? (100 * p.counts[o]) / total : 0}%` }} /></div>
                     <div className="w-8 tabular-nums text-right">{p.counts[o]}</div>
                   </div>
                 ))}
-                <div className="text-xs text-neutral-500">{p.answers.map((a) => `${board.guests.find((g) => g.guest_id === a.guest_id)?.name ?? "?"}: ${a.choice} (${a.by_kind})`).join(" · ")}</div>
+                <div className="text-xs text-neutral-500">{p.answers.map((a) => `${board.guests.find((g) => g.guest_id === a.guest_id)?.name ?? "?"}: ${isDate ? (a.ranking ?? [a.choice]).map(label).join(" › ") : a.choice} (${a.by_kind})`).join(" · ")}</div>
               </section>
             );
           })}
@@ -234,5 +265,77 @@ export default function Host() {
         </>
       )}
     </main>
+  );
+}
+
+function fmtDate(iso: string, timeZone: string) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone }).format(new Date(iso));
+}
+
+// Chat with Claude about the event. Opening it on a new party starts the
+// conversation; what Claude learns is saved to the party's planning notes.
+function Planner({ partyId, api, planning, onChange }: { partyId: string; api: Api; planning: Record<string, string>; onChange: () => void }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(true);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let live = true;
+    setMessages([]); setErr(""); setBusy(true);
+    api(`/api/host/parties/${partyId}/planner`, { method: "POST", body: "{}" })
+      .then((j) => { if (live) setMessages(j.messages); })
+      .catch((e) => { if (live) setErr((e as Error).message); })
+      .finally(() => { if (live) setBusy(false); });
+    return () => { live = false; };
+  }, [api, partyId]);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "nearest" }); }, [messages, busy]);
+
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setDraft(""); setErr(""); setBusy(true);
+    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", text }]);
+    try {
+      const j = await api(`/api/host/parties/${partyId}/planner`, { method: "POST", body: JSON.stringify({ text }) });
+      setMessages(j.messages);
+      onChange();
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  };
+
+  const notes = Object.entries(planning);
+  return (
+    <section className="rounded-lg border border-rose-900/50 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold">Plan with Claude</h3>
+        <button onClick={() => setOpen((o) => !o)} className="text-xs text-neutral-500 underline">{open ? "hide" : "show"}</button>
+      </div>
+      {open && (
+        <div className="grid md:grid-cols-3 gap-4">
+          <div className="md:col-span-2 space-y-3">
+            <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+              {messages.map((m) => (
+                <div key={m.id} className={`rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === "assistant" ? "bg-neutral-900 text-neutral-200" : "bg-rose-950/40 text-neutral-100 ml-8"}`}>{m.text}</div>
+              ))}
+              {busy && <div className="text-xs text-neutral-500">Claude is thinking…</div>}
+              <div ref={endRef} />
+            </div>
+            <div className="flex gap-2">
+              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} rows={2} placeholder="Answer Claude, or tell it anything about the event…" className="flex-1 rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-sm" />
+              <button onClick={send} disabled={busy || !draft.trim()} className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium disabled:opacity-50">Send</button>
+            </div>
+            {err && <p className="text-sm text-red-400">{err}</p>}
+          </div>
+          <div className="text-sm space-y-1">
+            <div className="text-xs uppercase tracking-[.14em] text-neutral-500">Saved to this event</div>
+            {notes.length ? notes.map(([k, v]) => <div key={k}><span className="text-neutral-500">{k.replace(/_/g, " ")}:</span> {v}</div>) : <div className="text-neutral-600">Nothing yet. Answers you give Claude show up here.</div>}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
