@@ -2,12 +2,19 @@
   "name": "indbyagent",
   "version": "0.1.0",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "typecheck": "tsc --noEmit" },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
     "@supabase/supabase-js": "^2",
+    "@types/qrcode": "^1.5.6",
     "agentmail": "latest",
     "next": "^15",
+    "qrcode": "^1.5.4",
     "react": "^19",
     "react-dom": "^19",
     "zod": "^3"

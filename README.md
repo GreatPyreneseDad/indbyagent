@@ -17,6 +17,15 @@ Built at SF Tech Week 2026 (Build Personal Agents Hack). Inspired by the agent d
 
 **GET never changes anything.** Mail scanners and link previews prefetch invite links; only a POST can RSVP.
 
+## Join by QR
+A host can publish a **join link** (`/j/<code>`) and put its QR code on a screen (`/q/<code>`, with live counters). A person scans it, types a name, and gets a personal invite link. An agent joins with one call:
+
+```bash
+curl -s -X POST https://indbyagent.com/j/<code>/join -H 'content-type: application/json' \
+  -d '{"name":"Leo Chen","email":"leo@example.com","by":{"kind":"agent","name":"Claude"}}'
+# → { "invite_url": "https://indbyagent.com/i/<token>", ... }
+```
+
 ## Actions (POST, JSON)
 
 ```bash

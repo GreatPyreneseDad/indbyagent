@@ -17,6 +17,7 @@ export default function Host() {
   const [partyId, setPartyId] = useState<string>("");
   const [board, setBoard] = useState<Board | null>(null);
   const [links, setLinks] = useState<{ name: string; invite_url: string }[]>([]);
+  const [join, setJoin] = useState<{ join_url: string; screen_url: string } | null>(null);
   const [err, setErr] = useState("");
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
@@ -61,6 +62,11 @@ export default function Host() {
   const addPoll = async (f: FormData) => {
     setErr("");
     try { await api(`/api/host/parties/${partyId}/polls`, { method: "POST", body: JSON.stringify({ question: f.get("question"), options: String(f.get("options")).split(",").map((s) => s.trim()).filter(Boolean) }) }); refresh(); }
+    catch (e) { setErr((e as Error).message); }
+  };
+  const makeQr = async () => {
+    setErr("");
+    try { const j = await api(`/api/host/parties/${partyId}/join`, { method: "POST", body: "{}" }); setJoin(j); window.open(j.screen_url, "_blank"); }
     catch (e) { setErr((e as Error).message); }
   };
   const sendInvites = async () => {
@@ -115,6 +121,10 @@ export default function Host() {
               <div key={String(k)} className="rounded-lg border border-neutral-800 p-3"><div className="text-xs text-neutral-500">{k}</div><div className="text-2xl font-semibold tabular-nums">{v}</div></div>
             ))}
           </section>
+          <div className="flex flex-wrap items-center gap-3">
+            <button onClick={makeQr} className="rounded-md bg-rose-600 hover:bg-rose-500 text-white px-4 py-2 font-medium">Show QR on the big screen</button>
+            {join && <a className="text-sm underline decoration-rose-500" href={join.join_url} target="_blank">{join.join_url.replace(/^https?:\/\//, "")}</a>}
+          </div>
           <div className="text-sm text-neutral-400">
             Answered by agents: <b className="text-rose-400">{s.by_agent}</b> · by humans: <b>{s.by_human}</b> · Claude tokens spent on this party: <b className="tabular-nums">{board.tokens.in + board.tokens.out}</b> ({board.tokens.cached} cached)
           </div>

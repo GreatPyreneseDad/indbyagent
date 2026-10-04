@@ -163,3 +163,9 @@ create policy host_llm on llm_calls for select using (party_id in (select id fro
 
 -- Realtime for the host board
 alter publication supabase_realtime add table rsvps, poll_answers, messages, guests;
+
+-- 2026-10-04: public join links (QR) and self-joined guests
+alter table parties add column join_token_hash text unique;
+alter table parties add column join_enabled boolean not null default true;
+alter table parties add column join_max int not null default 300;
+alter table guests add column self_joined boolean not null default false;
