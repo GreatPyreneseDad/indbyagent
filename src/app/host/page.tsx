@@ -46,7 +46,7 @@ export default function Host() {
 
   const sendLink = async () => {
     setErr("");
-    const { error } = await supaBrowser().auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=/host` } });
+    const { error } = await supaBrowser().auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/host` } });
     if (error) setErr(error.message); else setSent(true);
   };
 
