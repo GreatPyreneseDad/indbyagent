@@ -74,7 +74,7 @@ export async function notifyHostOfVenue(party: Party, s: VenueSuggestion): Promi
   const fmtList = (xs: string[]) => xs.join(", ") || "none";
   const subject = `Venue suggestion for ${party.title}: ${s.venue.name}`;
   const text = [
-    `Your planning agent found a venue for ${party.title}${s.mock ? " (mock result, local test mode)" : ""}.`,
+    `Your planning agent found a venue for ${party.title}${s.mock ? " (demo result from local test mode, not a live search)" : ""}.`,
     ``,
     `${s.venue.name}`,
     s.venue.address,

@@ -17,7 +17,7 @@ export type VenueStatus = "pending" | "confirmed" | "rejected";
 export type VenueSuggestion = {
   id: string; party_id: string; host_id: string; status: VenueStatus; created_at: string; decided_at: string | null;
   target_time: string;
-  venue: { name: string; address: string; url: string | null; why: string; capacity_fit: string; est_cost: string | null };
+  venue: { name: string; address: string; phone?: string | null; url: string | null; why: string; capacity_fit: string; est_cost: string | null };
   // From published hours and booking info. "open" is not a confirmed booking.
   availability: { status: "open" | "closed" | "unknown"; evidence: string; booking_url: string | null };
   invitees: { available: string[]; unavailable: string[]; unknown: string[] };
@@ -130,10 +130,10 @@ const schema = {
     venue: {
       type: "object", additionalProperties: false,
       properties: {
-        name: { type: "string" }, address: { type: "string" }, url: { type: ["string", "null"] },
+        name: { type: "string" }, address: { type: "string" }, phone: { type: ["string", "null"] }, url: { type: ["string", "null"] },
         why: { type: "string" }, capacity_fit: { type: "string" }, est_cost: { type: ["string", "null"] },
       },
-      required: ["name", "address", "url", "why", "capacity_fit", "est_cost"],
+      required: ["name", "address", "phone", "url", "why", "capacity_fit", "est_cost"],
     },
     availability: {
       type: "object", additionalProperties: false,
@@ -188,26 +188,48 @@ sources: the URLs you relied on. Do not invent venues, addresses, URLs or hours.
   };
 }
 
-// Without Claude (local testing): clearly fake results, rotated so each
-// search gives a different one. Open 9am-8pm in the party's timezone.
-const MOCK_VENUES = [
-  { name: "Sunny Side Community Room (mock)", why: "Indoor room with tables, a kitchenette, and space for games." },
-  { name: "Maple Park Picnic Pavilion (mock)", why: "Covered pavilion next to a playground; good for kids running around." },
-  { name: "Jumpin' Jungle Play Center (mock)", why: "Party packages with a private room and a host who runs activities." },
+// Without Claude (local testing): real San Francisco-area places from public
+// listings (checked Oct 2026), not a live search. Rotated so each search gives
+// a different one. hours: [open, close] in 24h local time by weekday (0 = Sun);
+// null = hours not known.
+type DemoVenue = Omit<Found["venue"], "why"> & { why: string; hours: ([number, number] | null)[] | null; hoursSource: string | null; booking_url: string | null };
+const DEMO_VENUES: DemoVenue[] = [
+  {
+    name: "Pizza Hut", address: "3349 Mission St, San Francisco, CA 94110", phone: "(415) 641-0400", url: "https://www.pizzahut.com/",
+    why: "Pizza for a crowd of kids in the Mission; call ahead for a large group order.", capacity_fit: "Restaurant seating; call ahead for 20+", est_cost: null,
+    hours: [[10.75, 23], [10.75, 23], [10.75, 23], [10.75, 23], [10.75, 23], [10.75, 24], [10.75, 24]], hoursSource: "us.andymap.com listing", booking_url: null,
+  },
+  {
+    name: "Mission Recreation Center", address: "2450 Harrison St, San Francisco, CA 94110", phone: "(415) 831-6820", url: "https://sfrecpark.org/Facilities/Facility/Details/Mission-Recreation-Center-100",
+    why: "City rec center with a gym and room rentals through SF Rec & Park; good for active kids.", capacity_fit: "Gym and rooms; reserve through SF Rec & Park", est_cost: null,
+    hours: Array(7).fill([9, 21]), hoursSource: "Apple Maps listing", booking_url: "https://sfrecpark.org/",
+  },
+  {
+    name: "Chuck E. Cheese San Bruno", address: "1270-1272 El Camino Real, San Bruno, CA 94066", phone: "(650) 244-9699", url: "https://www.chuckecheese.com/san-bruno-ca/",
+    why: "Birthday packages with a reserved area, food, games and a live show.", capacity_fit: "Packages from 6 kids; more can be added", est_cost: "From $99.99 for 6 kids",
+    hours: null, hoursSource: null, booking_url: "https://www.chuckecheese.com/san-bruno-ca/birthday-parties/",
+  },
 ];
 
-function mockSearch(party: Party, at: string, exclude: string[]): Found {
-  const pick = MOCK_VENUES.find((v) => !exclude.includes(v.name)) ?? MOCK_VENUES[0];
-  const hour = Number(new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: party.timezone }).format(new Date(at)));
-  const open = hour >= 9 && hour < 20;
+function demoSearch(party: Party, at: string, exclude: string[]): Found {
+  const pick = DEMO_VENUES.find((v) => !exclude.includes(v.name)) ?? DEMO_VENUES[0];
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "numeric", hourCycle: "h23", timeZone: party.timezone })
+    .formatToParts(new Date(at)).map((p) => [p.type, p.value]));
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday);
+  const hour = Number(parts.hour) + Number(parts.minute) / 60;
+  const span = pick.hours?.[day] ?? null;
+  const fmtH = (h: number) => new Date(Date.UTC(2000, 0, 1, Math.floor(h) % 24, Math.round((h % 1) * 60))).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
+  const availability: Found["availability"] = span
+    ? { status: hour >= span[0] && hour < span[1] ? "open" : "closed", evidence: `Listed hours ${parts.weekday} ${fmtH(span[0])}-${fmtH(span[1])} (${pick.hoursSource}); the party is at ${fmtDate(at, party.timezone)}.`, booking_url: pick.booking_url }
+    : { status: "unknown", evidence: `No published hours found; call ${pick.phone} to check ${fmtDate(at, party.timezone)}.`, booking_url: pick.booking_url };
   return {
-    venue: { name: pick.name, address: `Near ${party.location ?? "your area"}`, url: null, why: pick.why, capacity_fit: "Fits about 30 people (mock)", est_cost: "$150-$300 (mock)" },
-    availability: { status: open ? "open" : "closed", evidence: `Mock hours 9 AM-8 PM; the party is at ${fmtDate(at, party.timezone)}.`, booking_url: null },
+    venue: { name: pick.name, address: pick.address, phone: pick.phone, url: pick.url, why: pick.why, capacity_fit: pick.capacity_fit, est_cost: pick.est_cost },
+    availability,
     vendors: [
-      { category: "cake", name: "Corner Bakery (mock)", url: null, why: "Custom birthday cakes with 3 days' notice." },
-      { category: "entertainment", name: "Balloon Bob (mock)", url: null, why: "Balloon animals and games for kids, 1-2 hours." },
+      { category: "cake", name: "Corner Bakery (demo)", url: null, why: "Custom birthday cakes with 3 days' notice." },
+      { category: "entertainment", name: "Balloon Bob (demo)", url: null, why: "Balloon animals and games for kids, 1-2 hours." },
     ],
-    sources: [],
+    sources: [pick.url, pick.booking_url].filter((u): u is string => !!u),
   };
 }
 
@@ -240,7 +262,7 @@ Venues the host rejected: ${rejected.join("; ") || "(none)"}
 Already suggested (pick a different one): ${suggested.join("; ") || "(none)"}`;
     found = await searchWithClaude(anthropic, partyId, brief);
   } else {
-    found = mockSearch(p, at, suggested);
+    found = demoSearch(p, at, suggested);
     mock = true;
   }
   return addSuggestion({ party_id: partyId, host_id: hostId, target_time: at, invitees, mock, ...found });

@@ -19,6 +19,7 @@
     "qrcode": "^1.5.4",
     "react": "^19",
     "react-dom": "^19",
+    "three": "^0.180.0",
     "zod": "^3"
   },
   "devDependencies": {
@@ -26,6 +27,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.180.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

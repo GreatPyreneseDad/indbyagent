@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supaBrowser } from "@/lib/supabase-browser";
+import { partyBurst } from "./party-burst";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Api = (path: string, init?: RequestInit) => Promise<any>;
@@ -8,7 +9,7 @@ type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type SuggestedPoll = { question: string; options: string[] };
 type VenueSuggestion = {
   id: string; status: "pending" | "confirmed" | "rejected"; target_time: string; mock: boolean;
-  venue: { name: string; address: string; url: string | null; why: string; capacity_fit: string; est_cost: string | null };
+  venue: { name: string; address: string; phone?: string | null; url: string | null; why: string; capacity_fit: string; est_cost: string | null };
   availability: { status: "open" | "closed" | "unknown"; evidence: string; booking_url: string | null };
   invitees: { available: string[]; unavailable: string[]; unknown: string[] };
   vendors: { category: string; name: string; url: string | null; why: string }[];
@@ -389,28 +390,43 @@ function VenueAgent({ partyId, timezone, api, request }: { partyId: string; time
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
+  const [popup, setPopup] = useState<VenueSuggestion | null>(null);
 
   const load = useCallback(async () => {
     try { setList((await api(`/api/host/parties/${partyId}/venues`)).suggestions); } catch (e) { setErr((e as Error).message); }
   }, [api, partyId]);
-  useEffect(() => { setList([]); setNotice(""); setErr(""); load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { setList([]); setNotice(""); setErr(""); setPopup(null); load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
 
   const searching = useRef(false);
   const search = useCallback(async () => {
     if (searching.current) return;
-    searching.current = true; setBusy(true); setErr(""); setNotice("");
+    searching.current = true; setBusy(true); setErr(""); setNotice(""); setPopup(null);
+    partyBurst().catch(() => {});
+    const started = Date.now();
     try {
       const j = await api(`/api/host/parties/${partyId}/venues`, { method: "POST", body: "{}" });
+      // Let the balloons get going before the result covers them.
+      await new Promise((r) => setTimeout(r, Math.max(0, 1500 - (Date.now() - started))));
       setNotice(j.notice?.notified === "email" ? `Suggestion emailed to ${j.notice.to}.` : j.notice?.notified === "console" ? `Notification for ${j.notice.to} printed to the server console (email not configured).` : "");
+      setPopup(j.suggestion);
       await load();
     } catch (e) { setErr((e as Error).message); }
     finally { searching.current = false; setBusy(false); }
   }, [api, partyId, load]);
   useEffect(() => { if (request > 0) search(); }, [request]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!popup) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPopup(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [popup]);
   const decide = async (s: VenueSuggestion, decision: "confirm" | "reject") => {
     setErr("");
-    try { await api(`/api/host/parties/${partyId}/venues/${s.id}`, { method: "POST", body: JSON.stringify({ decision }) }); await load(); }
-    catch (e) { setErr((e as Error).message); }
+    try {
+      await api(`/api/host/parties/${partyId}/venues/${s.id}`, { method: "POST", body: JSON.stringify({ decision }) });
+      setPopup(null);
+      await load();
+    } catch (e) { setErr((e as Error).message); }
   };
 
   const pending = list.filter((s) => s.status === "pending");
@@ -432,8 +448,9 @@ function VenueAgent({ partyId, timezone, api, request }: { partyId: string; time
         <div key={s.id} className="rounded-lg border border-rose-900/60 p-4 space-y-3">
           <div className="flex flex-wrap items-baseline gap-2">
             <div className="text-lg font-semibold">{s.venue.url ? <a href={s.venue.url} target="_blank" className="underline decoration-rose-500">{s.venue.name}</a> : s.venue.name}</div>
-            <div className="text-sm text-neutral-400">{s.venue.address}</div>
-            {s.mock && <span className="text-xs text-amber-300">mock result (no Claude key)</span>}
+            <a href={mapsUrl(s)} target="_blank" className="text-sm text-neutral-400 underline decoration-neutral-700">{s.venue.address}</a>
+            {s.venue.phone && <span className="text-sm text-neutral-400">{s.venue.phone}</span>}
+            {s.mock && <span className="text-xs text-amber-300">{DEMO_LABEL}</span>}
           </div>
           <div className="text-sm text-neutral-300">{s.venue.why}</div>
           <div className="text-sm text-neutral-400">{s.venue.capacity_fit}{s.venue.est_cost ? ` · ${s.venue.est_cost}` : ""}</div>
@@ -468,6 +485,39 @@ function VenueAgent({ partyId, timezone, api, request }: { partyId: string; time
         <div className="text-xs text-neutral-500">{decided.map((s) => `${s.venue.name}: ${s.status}`).join(" · ")}</div>
       )}
       {!list.length && !busy && <p className="text-sm text-neutral-500">The agent will suggest a venue open at the party time (the leading date if guests are ranking dates) and show which invitees can make it.</p>}
+      {popup && (
+        <div role="dialog" aria-modal="true" aria-labelledby="venue-popup-title" onClick={() => setPopup(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div onClick={(e) => e.stopPropagation()} className="venue-pop w-full max-w-md overflow-hidden rounded-2xl border border-rose-900/60 bg-neutral-950 shadow-2xl shadow-rose-900/30">
+            <div className="bg-gradient-to-r from-rose-600 via-amber-500 to-fuchsia-600 px-5 py-3 text-sm font-semibold text-white">🎈 Found a venue!</div>
+            <div className="space-y-3 p-5">
+              <div>
+                <div id="venue-popup-title" className="text-2xl font-bold">{popup.venue.name}</div>
+                <a href={mapsUrl(popup)} target="_blank" className="text-neutral-300 underline decoration-rose-500">{popup.venue.address}</a>
+                {popup.venue.phone && <div className="text-sm text-neutral-400">{popup.venue.phone}</div>}
+                {popup.mock && <div className="mt-1 text-xs text-amber-300">{DEMO_LABEL}</div>}
+              </div>
+              <div className="text-sm text-neutral-300">{popup.venue.why}</div>
+              <div className="rounded-md bg-neutral-900 p-3 text-sm space-y-1">
+                <div className="text-xs uppercase tracking-[.14em] text-neutral-500">{fmtDate(popup.target_time, timezone)}</div>
+                <div className={avail[popup.availability.status][0]}>{avail[popup.availability.status][1]}</div>
+                <div className="text-neutral-400">{popup.availability.evidence}</div>
+                <div className="text-neutral-400">
+                  <span className="text-emerald-400">{popup.invitees.available.length} can make it</span> · <span className="text-red-400">{popup.invitees.unavailable.length} can&apos;t</span> · {popup.invitees.unknown.length} haven&apos;t said
+                </div>
+              </div>
+              {err && <p className="text-sm text-red-400">{err}</p>}
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button onClick={() => decide(popup, "confirm")} className="rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 text-sm font-medium">Confirm venue</button>
+                <button onClick={() => decide(popup, "reject")} className="rounded-md border border-neutral-700 px-4 py-2 text-sm">Reject</button>
+                <button onClick={() => setPopup(null)} className="ml-auto px-2 py-2 text-sm text-neutral-400 underline">Decide later</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
+
+const DEMO_LABEL = "Demo result: a real place, not a live search (no Claude key)";
+const mapsUrl = (s: VenueSuggestion) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${s.venue.name}, ${s.venue.address}`)}`;
