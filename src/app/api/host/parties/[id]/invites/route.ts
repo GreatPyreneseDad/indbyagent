@@ -3,7 +3,7 @@ import { db, type Party } from "@/lib/db";
 import { unauthorized, forbidden } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { hashToken, newToken } from "@/lib/token";
-import { sendInvites } from "@/lib/mail";
+import { sendInvites, ensureInbox } from "@/lib/mail";
 
 export const dynamic = "force-dynamic";
 
@@ -20,15 +20,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const done = new Set((invited ?? []).map((m) => m.guest_id));
   const { data: guests } = await db.from("guests").select("id,name,email").eq("party_id", id).not("email", "is", null);
   const todo = (guests ?? []).filter((g) => !done.has(g.id));
-  const withTokens = [];
-  for (const g of todo) {
-    const token = newToken();
-    await db.from("guests").update({ token_hash: hashToken(token), token_revoked_at: null }).eq("id", g.id);
-    withTokens.push({ ...g, email: g.email as string, token });
-  }
   try {
-    const r = await sendInvites(party as Party, withTokens);
-    return NextResponse.json(r);
+    // Make sure we can send at all before touching any token: a rotated token
+    // with no email behind it is a dead link.
+    const from = await ensureInbox(party as Party);
+    let sent = 0;
+    for (const g of todo) {
+      const { data: prev } = await db.from("guests").select("token_hash").eq("id", g.id).single();
+      const token = newToken();
+      await db.from("guests").update({ token_hash: hashToken(token), token_revoked_at: null }).eq("id", g.id);
+      try {
+        await sendInvites(party as Party, [{ ...g, email: g.email as string, token }]);
+        sent++;
+      } catch (e) {
+        if (prev) await db.from("guests").update({ token_hash: prev.token_hash }).eq("id", g.id); // keep the old link alive
+        throw e;
+      }
+    }
+    return NextResponse.json({ from, sent });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

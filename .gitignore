@@ -6,8 +6,3 @@ next-env.d.ts
 !.env.example
 .vercel
 .DS_Store
-.sandbox/
-.claude/
-.mcp.json
-*.tgz
-tsconfig.tsbuildinfo
