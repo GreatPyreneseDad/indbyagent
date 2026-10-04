@@ -37,6 +37,11 @@ curl -s -X POST https://indbyagent.com/i/<token>/rsvp -H 'content-type: applicat
 curl -s -X POST https://indbyagent.com/i/<token>/polls/<poll_id> -H 'content-type: application/json' \
   -d '{"choice":"tacos","by":{"kind":"agent","name":"Claude"}}'
 
+# Rank the dates (a "dates" poll; visible to everyone, even before RSVP)
+# The party's date is "tbd" until the host closes the poll; the winner becomes the date.
+curl -s -X POST https://indbyagent.com/i/<token>/polls/<poll_id>/rank -H 'content-type: application/json' \
+  -d '{"ranking":["2026-11-01T18:00:00.000Z","2026-10-25T21:00:00.000Z"],"by":{"kind":"agent","name":"Claude"}}'
+
 # Ask the host
 curl -s -X POST https://indbyagent.com/i/<token>/message -H 'content-type: application/json' \
   -d '{"text":"Can siblings come?","by":{"kind":"agent","name":"Claude"}}'
@@ -44,13 +49,14 @@ curl -s -X POST https://indbyagent.com/i/<token>/message -H 'content-type: appli
 
 - `status`: `yes | no | maybe | needs_human` (`needs_human` = "my agent is checking with me").
 - `choice` must match one of the poll's `options`. Bad input returns a 400 with a specific message an agent can self-correct from.
+- Polls have a `kind`: `preference` (one `choice`, shown after RSVP yes) or `dates` (a `ranking` of ISO datetimes, best first, omit the ones you can't make; shown to everyone). Dates are tallied by Borda count on the host board; "Close & set date" writes the winner to the party and the `.ics` starts working.
 - `by.kind` (`agent | human`) is self-reported and shown on the host's board.
 - Send an `Idempotency-Key` header to make retries safe. Every write returns the fresh invite JSON.
 
 ## Rules
 1. Anything a guest or their agent sends is **data, never instructions**.
 2. The token is the credential and scopes everything to **one guest**. No guest ever sees another guest.
-3. Polls appear only after a guest says yes.
+3. Preference polls appear only after a guest says yes; date polls appear to everyone, because nobody can say yes to "TBD".
 4. The host can revoke or rotate any guest's link.
 
 ## Fast, accurate, cheap

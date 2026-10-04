@@ -9,7 +9,7 @@ export const forbidden = () => NextResponse.json({ error: "not your party" }, { 
 export const PartyBody = z.object({
   title: z.string().trim().min(1).max(120),
   kind: z.string().trim().max(40).optional(),
-  starts_at: z.string().datetime({ offset: true }),
+  starts_at: z.string().datetime({ offset: true }).optional(), // omit it and open a "dates" poll
   ends_at: z.string().datetime({ offset: true }).optional(),
   timezone: z.string().default("America/Los_Angeles"),
   location: z.string().trim().max(200).optional(),
@@ -24,10 +24,35 @@ export const GuestsBody = z.object({
   })).min(1).max(200),
 });
 export const PollCreateBody = z.object({
-  question: z.string().trim().min(1).max(200),
+  kind: z.enum(["preference", "dates"]).default("preference"),
+  question: z.string().trim().min(1).max(200).optional(),
   options: z.array(z.string().trim().min(1).max(60)).min(2).max(8),
   closes_at: z.string().datetime({ offset: true }).optional(),
+}).superRefine((v, ctx) => {
+  if (v.kind === "dates") {
+    for (const o of v.options) if (isNaN(Date.parse(o)) || !/^\d{4}-\d{2}-\d{2}/.test(o)) ctx.addIssue({ code: "custom", path: ["options"], message: `dates poll options must be ISO-8601 datetimes, got "${o}"` });
+  } else if (!v.question) ctx.addIssue({ code: "custom", path: ["question"], message: "question is required" });
 });
+export const PollPatchBody = z.object({
+  status: z.enum(["open", "closed"]).optional(),
+  set_date: z.boolean().optional(), // dates poll: write the winner to parties.starts_at
+}).strict();
+
+// Ranked-choice tally (Borda). Each guest's ranking gives n-1 points to their
+// first choice, n-2 to the second, ... Unranked options get 0. A plain `choice`
+// counts as a one-item ranking.
+export function tallyRanked(options: string[], answers: { ranking?: string[] | null; choice?: string | null }[]) {
+  const n = options.length;
+  const score: Record<string, number> = Object.fromEntries(options.map((o) => [o, 0]));
+  const firsts: Record<string, number> = Object.fromEntries(options.map((o) => [o, 0]));
+  for (const a of answers) {
+    const r = (a.ranking?.length ? a.ranking : a.choice ? [a.choice] : []).filter((o) => o in score);
+    r.forEach((o, i) => { score[o] += n - 1 - i; });
+    if (r[0]) firsts[r[0]] += 1;
+  }
+  const ranked = [...options].sort((a, b) => score[b] - score[a] || firsts[b] - firsts[a] || options.indexOf(a) - options.indexOf(b));
+  return { score, firsts, winner: answers.length ? ranked[0] : null, ranked };
+}
 
 export function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40) + "-" + Math.random().toString(36).slice(2, 6);

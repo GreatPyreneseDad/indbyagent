@@ -15,7 +15,7 @@ export type Channel = "api" | "web" | "email" | "sms";
 
 export type Party = {
   id: string; host_id: string; slug: string; title: string; kind: string | null;
-  starts_at: string; ends_at: string | null; timezone: string; location: string | null;
+  starts_at: string | null; ends_at: string | null; timezone: string; location: string | null;
   details: string | null; rsvp_by: string | null; inbox_address: string | null;
 };
 export type Guest = {
@@ -27,5 +27,6 @@ export type GuestState = {
   status: RsvpStatus | null; party_size: number | null; dietary: string[] | null; note: string | null;
   by_kind: ByKind | null; by_name: string | null; channel: Channel | null; answered_at: string | null;
 };
-export type Poll = { id: string; party_id: string; question: string; options: string[]; closes_at: string | null; status: "open" | "closed" };
-export type PollAnswer = { poll_id: string; guest_id: string; choice: string; note: string | null; by_kind: ByKind; by_name: string | null; channel: Channel; created_at: string };
+export type PollKind = "preference" | "dates";
+export type Poll = { id: string; party_id: string; question: string; options: string[]; closes_at: string | null; status: "open" | "closed"; kind: PollKind };
+export type PollAnswer = { poll_id: string; guest_id: string; choice: string; ranking: string[] | null; note: string | null; by_kind: ByKind; by_name: string | null; channel: Channel; created_at: string };

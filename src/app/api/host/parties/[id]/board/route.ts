@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { unauthorized, forbidden } from "@/lib/host";
+import { unauthorized, forbidden, tallyRanked } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +25,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const rows = (pollState.data ?? []).filter((r) => r.poll_id === p.id && r.choice);
     const counts: Record<string, number> = Object.fromEntries(p.options.map((o: string) => [o, 0]));
     for (const r of rows) counts[r.choice] = (counts[r.choice] ?? 0) + 1;
-    return { ...p, counts, answers: rows.map((r) => ({ guest_id: r.guest_id, choice: r.choice, note: r.note, by_kind: r.by_kind, by_name: r.by_name, channel: r.channel })) };
+    const ranked = p.kind === "dates" ? tallyRanked(p.options, rows) : undefined;
+    return { ...p, counts, ranked, answers: rows.map((r) => ({ guest_id: r.guest_id, choice: r.choice, ranking: r.ranking, note: r.note, by_kind: r.by_kind, by_name: r.by_name, channel: r.channel })) };
   });
   const tokens = (llm.data ?? []).reduce((a, r) => ({ in: a.in + r.input_tokens, cached: a.cached + r.cache_read_tokens, out: a.out + r.output_tokens }), { in: 0, cached: 0, out: 0 });
   const summary = {

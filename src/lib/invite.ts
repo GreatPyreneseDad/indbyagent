@@ -18,16 +18,15 @@ export async function loadInvite(token: string): Promise<InviteCtx | null> {
     db.from("guest_state").select("*").eq("guest_id", guest.id).single(),
   ]);
   if (!party || !state) return null;
-  // Polls only exist for guests who said yes.
+  // "dates" polls are open to everyone (nobody can say yes to TBD);
+  // "preference" polls only to guests who said yes.
   let polls: Poll[] = [], answers: PollAnswer[] = [];
-  if (state.status === "yes") {
-    const { data: p } = await db.from("polls").select("*").eq("party_id", party.id).eq("status", "open").order("created_at");
-    polls = p ?? [];
-    if (polls.length) {
-      const { data: a } = await db.from("poll_state").select("poll_id,guest_id,choice,note,by_kind,by_name,channel,answered_at")
-        .eq("guest_id", guest.id).in("poll_id", polls.map((x) => x.id));
-      answers = (a ?? []).map((r) => ({ ...r, created_at: r.answered_at })) as PollAnswer[];
-    }
+  const { data: p } = await db.from("polls").select("*").eq("party_id", party.id).eq("status", "open").order("created_at");
+  polls = ((p ?? []) as Poll[]).filter((x) => x.kind === "dates" || state.status === "yes");
+  if (polls.length) {
+    const { data: a } = await db.from("poll_state").select("poll_id,guest_id,choice,ranking,note,by_kind,by_name,channel,answered_at")
+      .eq("guest_id", guest.id).in("poll_id", polls.map((x) => x.id));
+    answers = (a ?? []).map((r) => ({ ...r, created_at: r.answered_at })) as PollAnswer[];
   }
   return { party: party as Party, guest: guest as Guest, state: state as GuestState, polls, answers };
 }
@@ -59,23 +58,29 @@ export function inviteJson(ctx: InviteCtx, token: string) {
       by: state.by_kind ? { kind: state.by_kind, name: state.by_name } : undefined,
     }),
   };
+  if (!party.starts_at) (doc.party as Record<string, unknown>).date = "tbd";
+  const datePolls = polls.filter((p) => p.kind === "dates"), prefPolls = polls.filter((p) => p.kind !== "dates");
   if (polls.length) {
     doc.polls = polls.map((p) => {
       const a = answers.find((x) => x.poll_id === p.id);
-      return strip({ id: p.id, q: p.question, options: p.options, closes_at: p.closes_at, your_answer: a?.choice });
+      return strip({ id: p.id, kind: p.kind, q: p.question, options: p.options, timezone: p.kind === "dates" ? party.timezone : undefined, closes_at: p.closes_at,
+        your_answer: p.kind === "dates" ? undefined : a?.choice, your_ranking: p.kind === "dates" ? a?.ranking ?? (a?.choice ? [a.choice] : undefined) : undefined });
     });
   }
   doc.actions = {
     rsvp: `POST ${base}/rsvp`,
-    ...(polls.length ? { answer_poll: `POST ${base}/polls/{id}` } : {}),
+    ...(datePolls.length ? { rank_poll: `POST ${base}/polls/{id}/rank` } : {}),
+    ...(prefPolls.length ? { answer_poll: `POST ${base}/polls/{id}` } : {}),
     message_host: `POST ${base}/message`,
-    calendar: `GET ${base}.ics`,
+    ...(party.starts_at ? { calendar: `GET ${base}.ics` } : {}),
   };
   doc.schema = {
     rsvp: { status: "yes|no|maybe|needs_human", party_size: `int<=${guest.party_size_max}`, dietary: "string[]", note: "string", by: { kind: "agent|human", name: "string" } },
+    rank_poll: { ranking: "options you can make, best first (omit ones you can't)", note: "string", by: "same" },
     answer_poll: { choice: "one of options", note: "string", by: "same" },
     message_host: { text: "string", by: "same" },
   };
+  if (datePolls.length && !party.starts_at) doc.hint = "The date isn't set yet. Rank the dates you can make (check the calendar first); the host picks from the ranking. You can RSVP yes now and still rank.";
   return doc;
 }
 
@@ -98,16 +103,22 @@ export function inviteText(ctx: InviteCtx, token: string): string {
     `  -d '{"status":"yes","party_size":1,"dietary":[],"note":"","by":{"kind":"agent","name":"YOUR_AGENT"}}'`,
   ];
   for (const p of polls) {
-    lines.push(`Poll ${p.id}: ${p.question} [${p.options.join(" | ")}]`);
-    lines.push(`curl -s -X POST ${base}/polls/${p.id} -H 'content-type: application/json' -d '{"choice":"${p.options[0]}","by":{"kind":"agent","name":"YOUR_AGENT"}}'`);
+    if (p.kind === "dates") {
+      lines.push(`Date poll ${p.id}: ${p.question} — rank the ones you can make, best first (${party.timezone}): [${p.options.join(" | ")}]`);
+      lines.push(`curl -s -X POST ${base}/polls/${p.id}/rank -H 'content-type: application/json' -d '{"ranking":${JSON.stringify(p.options.slice(0, 2))},"by":{"kind":"agent","name":"YOUR_AGENT"}}'`);
+    } else {
+      lines.push(`Poll ${p.id}: ${p.question} [${p.options.join(" | ")}]`);
+      lines.push(`curl -s -X POST ${base}/polls/${p.id} -H 'content-type: application/json' -d '{"choice":"${p.options[0]}","by":{"kind":"agent","name":"YOUR_AGENT"}}'`);
+    }
   }
   lines.push(`Ask the host: curl -s -X POST ${base}/message -H 'content-type: application/json' -d '{"text":"...","by":{"kind":"agent","name":"YOUR_AGENT"}}'`);
-  lines.push("Rules: status must be yes|no|maybe|needs_human. choice must match an option exactly. GET never changes anything.");
+  lines.push("Rules: status must be yes|no|maybe|needs_human. choice and ranking entries must match options exactly. GET never changes anything.");
   return lines.filter((l) => l !== null).join("\n") + "\n";
 }
 
-export function inviteIcs(ctx: InviteCtx, token: string): string {
+export function inviteIcs(ctx: InviteCtx, token: string): string | null {
   const { party, guest } = ctx;
+  if (!party.starts_at) return null;
   const dt = (s: string) => new Date(s).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   const end = party.ends_at ?? new Date(new Date(party.starts_at).getTime() + 2 * 3600e3).toISOString();
   const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
@@ -127,6 +138,7 @@ export function inviteIcs(ctx: InviteCtx, token: string): string {
 }
 
 export function fmtWhen(party: Party): string {
+  if (!party.starts_at) return "Date TBD — vote on the dates";
   const o: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: party.timezone, timeZoneName: "short" };
   const s = new Intl.DateTimeFormat("en-US", o).format(new Date(party.starts_at));
   if (!party.ends_at) return s;
@@ -145,6 +157,7 @@ export const RsvpBody = z.object({
   by: By,
 }).strict();
 export const PollBody = z.object({ choice: z.string().trim().min(1).max(100), note: z.string().trim().max(300).optional(), by: By }).strict();
+export const RankBody = z.object({ ranking: z.array(z.string().trim().min(1).max(100)).min(1).max(8), note: z.string().trim().max(300).optional(), by: By }).strict();
 export const MessageBody = z.object({ text: z.string().trim().min(1).max(1000), by: By }).strict();
 
 type WriteMeta = { channel: Channel; idempotency_key?: string | null; defaultKind?: ByKind };
@@ -164,10 +177,30 @@ export async function writeRsvp(ctx: InviteCtx, body: z.infer<typeof RsvpBody>, 
 export async function writePollAnswer(ctx: InviteCtx, pollId: string, body: z.infer<typeof PollBody>, meta: WriteMeta) {
   const poll = ctx.polls.find((p) => p.id === pollId);
   if (!poll) return { error: "poll not open for this guest (RSVP yes first, and check the id)" };
+  if (poll.kind === "dates") return { error: "this is a ranked date poll; POST /polls/{id}/rank with {ranking:[...]}" };
   const choice = poll.options.find((o) => o.toLowerCase() === body.choice.toLowerCase());
   if (!choice) return { error: `choice must be one of: ${poll.options.join(", ")}` };
   const { error } = await db.from("poll_answers").insert({
     poll_id: poll.id, guest_id: ctx.guest.id, choice, note: body.note ?? null,
+    by_kind: body.by?.kind ?? meta.defaultKind ?? "human", by_name: body.by?.name ?? null, channel: meta.channel,
+    idempotency_key: meta.idempotency_key ?? null,
+  });
+  if (error && error.code !== "23505") return { error: error.message };
+  return { ok: true };
+}
+
+export async function writePollRanking(ctx: InviteCtx, pollId: string, body: z.infer<typeof RankBody>, meta: WriteMeta) {
+  const poll = ctx.polls.find((p) => p.id === pollId);
+  if (!poll) return { error: "poll not open for this guest (check the id)" };
+  if (poll.kind !== "dates") return { error: "this poll takes a single choice; POST /polls/{id} with {choice}" };
+  const ranking: string[] = [];
+  for (const r of body.ranking) {
+    const o = poll.options.find((x) => x.toLowerCase() === r.toLowerCase() || Date.parse(x) === Date.parse(r));
+    if (!o) return { error: `ranking entries must be options: ${poll.options.join(", ")}` };
+    if (!ranking.includes(o)) ranking.push(o);
+  }
+  const { error } = await db.from("poll_answers").insert({
+    poll_id: poll.id, guest_id: ctx.guest.id, choice: ranking[0], ranking, note: body.note ?? null,
     by_kind: body.by?.kind ?? meta.defaultKind ?? "human", by_name: body.by?.name ?? null, channel: meta.channel,
     idempotency_key: meta.idempotency_key ?? null,
   });

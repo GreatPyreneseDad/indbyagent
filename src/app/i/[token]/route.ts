@@ -20,6 +20,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   const cache = { "cache-control": "private, max-age=30", vary: "accept" };
   if (fmt === "json") return NextResponse.json(inviteJson(ctx, token), { headers: cache });
   if (fmt === "txt") return new NextResponse(inviteText(ctx, token), { headers: { ...cache, "content-type": "text/plain; charset=utf-8" } });
-  if (fmt === "ics") return new NextResponse(inviteIcs(ctx, token), { headers: { "content-type": "text/calendar; charset=utf-8", "content-disposition": `attachment; filename="${ctx.party.slug}.ics"` } });
+  if (fmt === "ics") { const ics = inviteIcs(ctx, token); if (!ics) return NextResponse.json({ error: "date not set yet; rank the date poll" }, { status: 409 }); return new NextResponse(ics, { headers: { "content-type": "text/calendar; charset=utf-8", "content-disposition": `attachment; filename="${ctx.party.slug}.ics"` } }); }
   return new NextResponse(renderInvitePage(ctx, token), { headers: { ...cache, "content-type": "text/html; charset=utf-8" } });
 }

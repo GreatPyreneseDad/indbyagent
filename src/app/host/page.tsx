@@ -3,10 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supaBrowser } from "@/lib/supabase-browser";
 
 type Board = {
-  party: { id: string; title: string; starts_at: string; location: string | null; inbox_address: string | null };
+  party: { id: string; title: string; starts_at: string | null; location: string | null; inbox_address: string | null };
   summary: { invited: number; yes: number; no: number; maybe: number; needs_human: number; pending: number; headcount: number; by_agent: number; by_human: number };
   guests: { guest_id: string; name: string; email: string | null; status: string | null; party_size: number | null; dietary: string[] | null; note: string | null; by_kind: string | null; by_name: string | null; channel: string | null; answered_at: string | null }[];
-  polls: { id: string; question: string; options: string[]; status: string; counts: Record<string, number>; answers: { guest_id: string; choice: string; by_kind: string; by_name: string | null; channel: string }[] }[];
+  polls: { id: string; kind: "preference" | "dates"; question: string; options: string[]; status: string; counts: Record<string, number>; ranked?: { score: Record<string, number>; firsts: Record<string, number>; winner: string | null; ranked: string[] }; answers: { guest_id: string; choice: string; ranking: string[] | null; by_kind: string; by_name: string | null; channel: string }[] }[];
   messages: { id: string; guest_id: string | null; direction: string; text: string; by_kind: string; by_name: string | null; channel: string; created_at: string }[];
   tokens: { in: number; cached: number; out: number };
 };
@@ -69,7 +69,7 @@ export default function Host() {
 
   const createParty = async (f: FormData) => {
     setErr("");
-    const starts = new Date(String(f.get("starts_at"))).toISOString();
+    const starts = f.get("starts_at") ? new Date(String(f.get("starts_at"))).toISOString() : undefined; // blank = TBD, open a dates poll
     try {
       const j = await api("/api/host/parties", { method: "POST", body: JSON.stringify({ title: f.get("title"), starts_at: starts, location: f.get("location") || undefined, details: f.get("details") || undefined, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }) });
       setParties((p) => [j.party, ...p]); setPartyId(j.party.id);
@@ -91,7 +91,14 @@ export default function Host() {
   };
   const addPoll = async (f: FormData) => {
     setErr("");
-    try { await api(`/api/host/parties/${partyId}/polls`, { method: "POST", body: JSON.stringify({ question: f.get("question"), options: String(f.get("options")).split(",").map((s) => s.trim()).filter(Boolean) }) }); refresh(); }
+    const kind = String(f.get("kind") ?? "preference");
+    const options = String(f.get("options")).split(",").map((s) => s.trim()).filter(Boolean).map((o) => kind === "dates" ? new Date(o).toISOString() : o);
+    try { await api(`/api/host/parties/${partyId}/polls`, { method: "POST", body: JSON.stringify({ kind, question: f.get("question") || undefined, options }) }); refresh(); }
+    catch (e) { setErr((e as Error).message); }
+  };
+  const closePoll = async (pollId: string, setDate: boolean) => {
+    setErr("");
+    try { await api(`/api/host/parties/${partyId}/polls/${pollId}`, { method: "PATCH", body: JSON.stringify({ status: "closed", set_date: setDate }) }); refresh(); }
     catch (e) { setErr((e as Error).message); }
   };
   const makeQr = async () => {
@@ -142,7 +149,7 @@ export default function Host() {
         <form action={createParty} className="grid gap-3 max-w-lg rounded-lg border border-neutral-800 p-4">
           <h2 className="font-semibold">New party</h2>
           <input name="title" required placeholder="Maya's 6th Birthday" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
-          <input name="starts_at" type="datetime-local" required className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
+          <input name="starts_at" type="datetime-local" title="Leave blank to poll guests on the date" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
           <input name="location" placeholder="Dolores Park playground" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
           <textarea name="details" placeholder="Dinosaur theme. Pizza and cake." className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
           <button className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium w-fit">Create</button>
@@ -153,7 +160,7 @@ export default function Host() {
         <>
           <section>
             <h1 className="text-3xl font-bold tracking-tight">{board.party.title}</h1>
-            <div className="text-neutral-400 text-sm">{new Date(board.party.starts_at).toLocaleString()} {board.party.location ? `· ${board.party.location}` : ""} {board.party.inbox_address ? `· ${board.party.inbox_address}` : ""}</div>
+            <div className="text-neutral-400 text-sm">{board.party.starts_at ? new Date(board.party.starts_at).toLocaleString() : "Date TBD"} {board.party.location ? `· ${board.party.location}` : ""} {board.party.inbox_address ? `· ${board.party.inbox_address}` : ""}</div>
           </section>
 
           <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -189,17 +196,28 @@ export default function Host() {
 
           {board.polls.map((p) => {
             const total = Object.values(p.counts).reduce((a, b) => a + b, 0);
+            const isDates = p.kind === "dates";
+            const label = (o: string) => (isDates ? new Date(o).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : o);
+            const val = (o: string) => (isDates ? p.ranked?.score[o] ?? 0 : p.counts[o]);
+            const max = Math.max(1, ...p.options.map(val));
+            const opts = isDates && p.ranked ? p.ranked.ranked : p.options;
             return (
               <section key={p.id} className="rounded-lg border border-neutral-800 p-4 space-y-2">
-                <div className="flex justify-between"><h3 className="font-semibold">{p.question}</h3><span className="text-xs text-neutral-500">{total} answered · {p.status}</span></div>
-                {p.options.map((o) => (
+                <div className="flex justify-between gap-2"><h3 className="font-semibold">{p.question}{isDates ? " · ranked dates" : ""}</h3><span className="text-xs text-neutral-500">{total} answered · {p.status}</span></div>
+                {opts.map((o) => (
                   <div key={o} className="flex items-center gap-3 text-sm">
-                    <div className="w-28 truncate">{o}</div>
-                    <div className="flex-1 h-2 bg-neutral-900 rounded"><div className="h-2 bg-rose-500 rounded" style={{ width: `${total ? (100 * p.counts[o]) / total : 0}%` }} /></div>
-                    <div className="w-8 tabular-nums text-right">{p.counts[o]}</div>
+                    <div className="w-44 truncate">{label(o)}</div>
+                    <div className="flex-1 h-2 bg-neutral-900 rounded"><div className="h-2 bg-rose-500 rounded" style={{ width: `${(100 * val(o)) / max}%` }} /></div>
+                    <div className="w-12 tabular-nums text-right">{isDates ? `${val(o)} pts` : val(o)}</div>
                   </div>
                 ))}
-                <div className="text-xs text-neutral-500">{p.answers.map((a) => `${board.guests.find((g) => g.guest_id === a.guest_id)?.name ?? "?"}: ${a.choice} (${a.by_kind})`).join(" · ")}</div>
+                <div className="text-xs text-neutral-500">{p.answers.map((a) => `${board.guests.find((g) => g.guest_id === a.guest_id)?.name ?? "?"}: ${isDates ? (a.ranking ?? [a.choice]).map(label).join(" › ") : a.choice} (${a.by_kind})`).join(" · ")}</div>
+                {p.status === "open" && (
+                  <div className="flex gap-2 text-sm">
+                    {isDates && p.ranked?.winner && <button onClick={() => closePoll(p.id, true)} className="rounded-md bg-white text-neutral-900 px-3 py-1">Close & set date: {label(p.ranked.winner)}</button>}
+                    <button onClick={() => closePoll(p.id, false)} className="rounded-md border border-neutral-700 px-3 py-1">Close poll</button>
+                  </div>
+                )}
               </section>
             );
           })}
@@ -219,8 +237,9 @@ export default function Host() {
             </form>
             <form action={addPoll} className="grid gap-2 rounded-lg border border-neutral-800 p-4">
               <h3 className="font-semibold">Poll the yeses</h3>
-              <input name="question" required placeholder="Pizza or tacos?" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
-              <input name="options" required placeholder="pizza, tacos" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
+              <select name="kind" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2"><option value="preference">Preference (one choice, yeses only)</option><option value="dates">Dates (ranked, everyone)</option></select>
+              <input name="question" placeholder="Pizza or tacos?  (dates: optional)" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
+              <input name="options" required placeholder="pizza, tacos   — or dates: 2026-10-25 14:00, 2026-11-01 11:00" className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" />
               <button className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium w-fit">Open poll</button>
             </form>
           </div>

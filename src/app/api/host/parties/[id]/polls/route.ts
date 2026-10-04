@@ -13,7 +13,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const p = await parseBody(req, PollCreateBody);
   if ("res" in p) return p.res;
-  const { data, error } = await db.from("polls").insert({ party_id: id, ...p.data }).select().single();
+  const row = { party_id: id, ...p.data, question: p.data.question ?? "Which dates work for you?" };
+  if (row.kind === "dates") row.options = row.options.map((o) => new Date(o).toISOString());
+  const { data, error } = await db.from("polls").insert(row).select().single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json({ poll: data }, { status: 201 });
 }
