@@ -37,7 +37,10 @@ export default function Host() {
 
   const refresh = useCallback(async () => {
     if (!partyId) return;
-    try { setBoard(await api(`/api/host/parties/${partyId}/board`)); } catch (e) { setErr((e as Error).message); }
+    try {
+      fetch(`/api/host/parties/${partyId}/inbox`, { method: "POST", headers: { authorization: `Bearer ${secret}` } }).catch(() => {});
+      setBoard(await api(`/api/host/parties/${partyId}/board`));
+    } catch (e) { setErr((e as Error).message); }
   }, [api, partyId]);
 
   useEffect(() => { if (!authed || !partyId) return; refresh(); const t = setInterval(refresh, 2500); return () => clearInterval(t); }, [authed, partyId, refresh]);
