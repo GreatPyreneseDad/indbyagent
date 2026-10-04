@@ -11,7 +11,7 @@ export async function ensureInbox(party: Party): Promise<string> {
   const inbox = await mail.inboxes.create({
     username: party.slug.replace(/[^a-z0-9-]/g, "").slice(0, 30),
     displayName: party.title,
-    clientId: `party:${party.id}`,
+    clientId: `party-${party.id}`,
   });
   const address = inbox.inboxId;
   await db.from("parties").update({ inbox_address: address }).eq("id", party.id);
