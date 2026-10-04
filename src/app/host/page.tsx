@@ -41,6 +41,7 @@ export default function Host() {
   const [join, setJoin] = useState<{ join_url: string; screen_url: string } | null>(null);
   const [err, setErr] = useState("");
   const [backups, setBackups] = useState<number[]>([]);
+  const [venueRequest, setVenueRequest] = useState(0);
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const r = await fetch(path, { ...init, credentials: "same-origin", headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
@@ -192,8 +193,8 @@ export default function Host() {
             <div className="text-neutral-400 text-sm">{new Date(board.party.starts_at).toLocaleString()} {board.party.location ? `· ${board.party.location}` : ""} {board.party.inbox_address ? `· ${board.party.inbox_address}` : ""}</div>
           </section>
 
-          <Planner partyId={board.party.id} api={api} onChange={refresh} />
-          <VenueAgent partyId={board.party.id} timezone={board.party.timezone} api={api} />
+          <Planner partyId={board.party.id} api={api} onChange={refresh} onFindVenue={() => setVenueRequest((n) => n + 1)} />
+          <VenueAgent partyId={board.party.id} timezone={board.party.timezone} api={api} request={venueRequest} />
 
           <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {[["Invited", s.invited], ["Yes", s.yes], ["Headcount", s.headcount], ["Waiting on human", s.needs_human], ["Pending", s.pending]].map(([k, v]) => (
@@ -291,7 +292,7 @@ function fmtDate(iso: string, timeZone: string) {
 
 // Chat with Claude about the event. Opening it on a new party starts the
 // conversation. Polls Claude suggests are only opened when the host clicks.
-function Planner({ partyId, api, onChange }: { partyId: string; api: Api; onChange: () => void }) {
+function Planner({ partyId, api, onChange, onFindVenue }: { partyId: string; api: Api; onChange: () => void; onFindVenue: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [planning, setPlanning] = useState<Record<string, string>>({});
   const [suggested, setSuggested] = useState<SuggestedPoll[]>([]);
@@ -302,7 +303,8 @@ function Planner({ partyId, api, onChange }: { partyId: string; api: Api; onChan
   const [open, setOpen] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
 
-  const apply = (j: { messages: ChatMessage[]; planning: Record<string, string>; suggested_polls?: SuggestedPoll[]; offline?: boolean }) => {
+  const apply = (j: { messages: ChatMessage[]; planning: Record<string, string>; suggested_polls?: SuggestedPoll[]; find_venue?: boolean; offline?: boolean }) => {
+    if (j.find_venue) onFindVenue();
     setMessages(j.messages); setPlanning(j.planning);
     if (j.suggested_polls?.length) setSuggested((s) => [...s, ...j.suggested_polls!]);
     if (j.offline) setOffline(true);
@@ -381,7 +383,8 @@ function Planner({ partyId, api, onChange }: { partyId: string; api: Api; onChan
 
 // The venue agent: searches for a venue open at the likely party time, says
 // which invitees can make it, and waits for the host to confirm or reject.
-function VenueAgent({ partyId, timezone, api }: { partyId: string; timezone: string; api: Api }) {
+// request: bumped by the planning chat when Claude wants a venue search.
+function VenueAgent({ partyId, timezone, api, request }: { partyId: string; timezone: string; api: Api; request: number }) {
   const [list, setList] = useState<VenueSuggestion[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -392,15 +395,18 @@ function VenueAgent({ partyId, timezone, api }: { partyId: string; timezone: str
   }, [api, partyId]);
   useEffect(() => { setList([]); setNotice(""); setErr(""); load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
 
-  const search = async () => {
-    setBusy(true); setErr(""); setNotice("");
+  const searching = useRef(false);
+  const search = useCallback(async () => {
+    if (searching.current) return;
+    searching.current = true; setBusy(true); setErr(""); setNotice("");
     try {
       const j = await api(`/api/host/parties/${partyId}/venues`, { method: "POST", body: "{}" });
       setNotice(j.notice?.notified === "email" ? `Suggestion emailed to ${j.notice.to}.` : j.notice?.notified === "console" ? `Notification for ${j.notice.to} printed to the server console (email not configured).` : "");
       await load();
     } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(false); }
-  };
+    finally { searching.current = false; setBusy(false); }
+  }, [api, partyId, load]);
+  useEffect(() => { if (request > 0) search(); }, [request]); // eslint-disable-line react-hooks/exhaustive-deps
   const decide = async (s: VenueSuggestion, decision: "confirm" | "reject") => {
     setErr("");
     try { await api(`/api/host/parties/${partyId}/venues/${s.id}`, { method: "POST", body: JSON.stringify({ decision }) }); await load(); }

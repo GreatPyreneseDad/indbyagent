@@ -1,6 +1,7 @@
 import { AgentMailClient } from "agentmail";
 import { db, type Party } from "./db";
-import { store, type DatePoll, type VenueSuggestion } from "./store";
+import { store, type DatePoll } from "./store";
+import type { VenueSuggestion } from "./vendors";
 import { fmtDate, fmtWhen } from "./invite";
 import { siteUrl } from "./token";
 import { fallback } from "./fallback";

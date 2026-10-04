@@ -1,14 +1,107 @@
+import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import { neon } from "@neondatabase/serverless";
 import { db, type GuestState, type Party } from "./db";
 import { anthropic, MODEL } from "./parse";
 import { fmtDate } from "./invite";
 import { instantRunoff } from "./ranked";
-import { store, type DateRanking, type DatePoll, type NewVenueSuggestion, type VenueSuggestion } from "./store";
+import { fallback } from "./fallback";
+import { store, type DateRanking, type DatePoll } from "./store";
 
-// The venue agent: picks the time the party is most likely to happen, works
-// out which invitees can make it, then searches the web for a venue that is
-// open then (plus a few vendors) and hands the host one suggestion to confirm
-// or reject.
+// The venue and vendor agent, and the only module that talks to Neon
+// (NEON_DATABASE_URL, schema in neon/migrations). Callers must have checked
+// currentHost + hostOwnsParty; queries are still scoped to party and host.
+// Host-facing only: nothing here reaches the guest invite.
+
+export type VenueStatus = "pending" | "confirmed" | "rejected";
+export type VenueSuggestion = {
+  id: string; party_id: string; host_id: string; status: VenueStatus; created_at: string; decided_at: string | null;
+  target_time: string;
+  venue: { name: string; address: string; url: string | null; why: string; capacity_fit: string; est_cost: string | null };
+  // From published hours and booking info. "open" is not a confirmed booking.
+  availability: { status: "open" | "closed" | "unknown"; evidence: string; booking_url: string | null };
+  invitees: { available: string[]; unavailable: string[]; unknown: string[] };
+  vendors: { category: string; name: string; url: string | null; why: string }[];
+  sources: string[];
+  mock: boolean;
+};
+type NewSuggestion = Omit<VenueSuggestion, "id" | "status" | "created_at" | "decided_at">;
+
+// ---------- storage ----------
+
+const iso = (v: unknown) => (v == null ? null : new Date(v as string).toISOString());
+type Row = Omit<VenueSuggestion, "created_at" | "decided_at" | "target_time"> & { created_at: unknown; decided_at: unknown; target_time: unknown };
+const fromRow = (r: Row): VenueSuggestion => ({ ...r, created_at: iso(r.created_at)!, decided_at: iso(r.decided_at), target_time: iso(r.target_time)! });
+
+// Outside dev a missing NEON_DATABASE_URL throws here, on the first vendor call.
+function sql() {
+  const url = process.env.NEON_DATABASE_URL;
+  if (!url) throw new Error("NEON_DATABASE_URL is not set; venue suggestions need the Neon database");
+  return neon(url);
+}
+
+const g = globalThis as typeof globalThis & { __indbyagentVenues?: VenueSuggestion[] };
+const mem = (g.__indbyagentVenues ??= []);
+
+export async function listSuggestions(partyId: string, hostId: string): Promise<VenueSuggestion[]> {
+  if (fallback.neon) return mem.filter((s) => s.party_id === partyId && s.host_id === hostId).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const rows = await sql()`select * from venue_suggestions where party_id = ${partyId} and host_id = ${hostId} order by created_at desc`;
+  return (rows as Row[]).map(fromRow);
+}
+
+async function addSuggestion(s: NewSuggestion): Promise<VenueSuggestion> {
+  const v: VenueSuggestion = { ...s, id: randomUUID(), status: "pending", created_at: new Date().toISOString(), decided_at: null };
+  if (fallback.neon) { mem.push(v); return v; }
+  const [row] = await sql()`insert into venue_suggestions (id, party_id, host_id, status, target_time, venue, availability, invitees, vendors, sources, mock, created_at)
+    values (${v.id}, ${v.party_id}, ${v.host_id}, 'pending', ${v.target_time}, ${JSON.stringify(v.venue)}, ${JSON.stringify(v.availability)},
+      ${JSON.stringify(v.invitees)}, ${JSON.stringify(v.vendors)}, ${JSON.stringify(v.sources)}, ${v.mock}, ${v.created_at})
+    returning *`;
+  return fromRow(row as Row);
+}
+
+// Only pending suggestions can be decided. One confirmed venue per party: a
+// new confirmation turns the previous one into rejected.
+export async function decideSuggestion(partyId: string, hostId: string, id: string, status: "confirmed" | "rejected"): Promise<VenueSuggestion | { error: string }> {
+  const current = (await listSuggestions(partyId, hostId)).find((s) => s.id === id);
+  if (!current) return { error: "not found" };
+  if (current.status !== "pending") return { error: `already ${current.status}` };
+  const now = new Date().toISOString();
+  if (fallback.neon) {
+    if (status === "confirmed") for (const s of mem) if (s.party_id === partyId && s.status === "confirmed") Object.assign(s, { status: "rejected", decided_at: now });
+    const s = mem.find((x) => x.id === id)!;
+    Object.assign(s, { status, decided_at: now });
+    return { ...s };
+  }
+  const q = sql();
+  const results = await q.transaction([
+    ...(status === "confirmed" ? [q`update venue_suggestions set status = 'rejected', decided_at = ${now} where party_id = ${partyId} and host_id = ${hostId} and status = 'confirmed'`] : []),
+    q`update venue_suggestions set status = ${status}, decided_at = ${now} where id = ${id} and party_id = ${partyId} and host_id = ${hostId} and status = 'pending' returning *`,
+  ]);
+  const [row] = results[results.length - 1] as Row[];
+  return row ? fromRow(row) : { error: "already decided" };
+}
+
+// What the planning chat knows about venues. Never throws: the planner keeps
+// working if Neon is down or unset.
+export async function venueContext(partyId: string, hostId: string): Promise<string> {
+  try {
+    const list = await listSuggestions(partyId, hostId);
+    const confirmed = list.find((s) => s.status === "confirmed");
+    const pending = list.filter((s) => s.status === "pending");
+    const rejected = list.filter((s) => s.status === "rejected").map((s) => s.venue.name);
+    return [
+      confirmed ? `Confirmed venue: ${confirmed.venue.name}, ${confirmed.venue.address}.` : "No venue confirmed yet.",
+      ...pending.map((s) => `Waiting for the host: ${s.venue.name} (${s.availability.status} at the target time; ${s.invitees.available.length} invitees can make it).`),
+      rejected.length ? `Rejected: ${rejected.join("; ")}.` : "",
+      ...(confirmed?.vendors ?? []).map((v) => `Vendor idea (${v.category}): ${v.name}.`),
+    ].filter(Boolean).join("\n");
+  } catch (e) {
+    console.error("venueContext:", (e as Error).message);
+    return "Venue info unavailable.";
+  }
+}
+
+// ---------- the agent ----------
 
 export function targetTime(party: Party, datePoll: DatePoll | null, rankings: DateRanking[]): string {
   if (!datePoll || !rankings.length) return party.starts_at;
@@ -16,7 +109,7 @@ export function targetTime(party: Party, datePoll: DatePoll | null, rankings: Da
 }
 
 // A ranking lists every date a guest can make, so a date left off means "can't".
-// Without a ranking, only a yes for the original date counts as available.
+// Without a ranking, only a yes or no for the original date counts.
 export function inviteeAvailability(guests: GuestState[], at: string, datePoll: DatePoll | null, rankings: DateRanking[], startsAt: string) {
   const out = { available: [] as string[], unavailable: [] as string[], unknown: [] as string[] };
   const same = (a: string, b: string) => new Date(a).getTime() === new Date(b).getTime();
@@ -56,11 +149,11 @@ const schema = {
   required: ["venue", "availability", "vendors", "sources"],
 };
 
-type Found = Pick<NewVenueSuggestion, "venue" | "availability" | "vendors" | "sources">;
+type Found = Pick<NewSuggestion, "venue" | "availability" | "vendors" | "sources">;
 
 async function searchWithClaude(client: Anthropic, partyId: string, brief: string): Promise<Found> {
   const system = `You find a venue and a few vendors for a party, using web search. Output only the JSON object.
-Pick ONE venue near the party's area that fits the guest count, budget and theme, and that is open at the target time. Check its published opening hours (and whether it hosts private parties or takes bookings) for that weekday and time. Avoid venues the host already rejected.
+Pick ONE venue near the party's area that fits the guest count, budget and theme, and that is open at the target time. Check its published opening hours (and whether it hosts private parties or takes bookings) for that weekday and time. Pick a venue that is not in the rejected or already-suggested lists.
 availability.status: "open" only if published hours cover the target time, "closed" if they don't, "unknown" if you can't find hours. evidence: quote or summarize what the source says, naming the source. You cannot see bookings, so never claim the venue is free or reserved; put a booking or contact link in booking_url when you find one.
 vendors: up to 3 local vendors the party needs (e.g. bakery for the cake, entertainer, party supplies or decorations), skipping anything the notes say is already handled.
 sources: the URLs you relied on. Do not invent venues, addresses, URLs or hours.`;
@@ -107,9 +200,8 @@ function mockSearch(party: Party, at: string, exclude: string[]): Found {
   const pick = MOCK_VENUES.find((v) => !exclude.includes(v.name)) ?? MOCK_VENUES[0];
   const hour = Number(new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: party.timezone }).format(new Date(at)));
   const open = hour >= 9 && hour < 20;
-  const area = party.location ?? "your area";
   return {
-    venue: { name: pick.name, address: `Near ${area}`, url: null, why: pick.why, capacity_fit: "Fits about 30 people (mock)", est_cost: "$150-$300 (mock)" },
+    venue: { name: pick.name, address: `Near ${party.location ?? "your area"}`, url: null, why: pick.why, capacity_fit: "Fits about 30 people (mock)", est_cost: "$150-$300 (mock)" },
     availability: { status: open ? "open" : "closed", evidence: `Mock hours 9 AM-8 PM; the party is at ${fmtDate(at, party.timezone)}.`, booking_url: null },
     vendors: [
       { category: "cake", name: "Corner Bakery (mock)", url: null, why: "Custom birthday cakes with 3 days' notice." },
@@ -119,13 +211,13 @@ function mockSearch(party: Party, at: string, exclude: string[]): Found {
   };
 }
 
-export async function suggestVenue(partyId: string): Promise<VenueSuggestion> {
+export async function suggestVenue(partyId: string, hostId: string): Promise<VenueSuggestion> {
   const [{ data: party }, { data: guests }, datePoll, notes, past] = await Promise.all([
     db.from("parties").select("*").eq("id", partyId).single(),
     db.from("guest_state").select("*").eq("party_id", partyId).order("name"),
     store.datePoll(partyId),
     store.planningNotes(partyId),
-    store.venueSuggestions(partyId),
+    listSuggestions(partyId, hostId),
   ]);
   if (!party) throw new Error("party not found");
   const p = party as Party;
@@ -151,5 +243,5 @@ Already suggested (pick a different one): ${suggested.join("; ") || "(none)"}`;
     found = mockSearch(p, at, suggested);
     mock = true;
   }
-  return store.addVenueSuggestion({ party_id: partyId, target_time: at, invitees, mock, ...found });
+  return addSuggestion({ party_id: partyId, host_id: hostId, target_time: at, invitees, mock, ...found });
 }

@@ -10,4 +10,6 @@ export const fallback = {
   claude: dev && !process.env.ANTHROPIC_API_KEY,
   // Invite emails printed to the server console instead of sent.
   mail: dev && !process.env.AGENTMAIL_API_KEY,
+  // Venue suggestions kept in memory instead of Neon (see vendors.ts).
+  neon: dev && !process.env.NEON_DATABASE_URL,
 };

@@ -67,10 +67,14 @@ When a host creates a party, the board opens a chat with Claude. It asks one que
 A host can add up to 7 backup dates when creating a party. Invitees then rank every date (ranked choice) from their invite link, and the invite email lists the dates. The board shows first choices and the instant-runoff leader.
 
 ## Venue and vendor agent
-From the host board, "Find a venue" sends an agent (Claude with web search) to find one venue near the party plus a few vendors (cake, entertainment, supplies). It targets the leading date in the ranked date poll (or the party's date), checks the venue's published hours for that time, and lists which invitees can make it: a ranking that includes the date means yes, one that leaves it off means no, no ranking means unknown. The host gets an email and a board card to **confirm or reject**; rejecting and searching again gives a different venue. "Open then" comes from published hours, not a booking.
+From the host board, "Find a venue" sends an agent (Claude with web search) to find one venue near the party plus a few vendors (cake, entertainment, supplies). It targets the leading date in the ranked date poll (or the party's date), checks the venue's published hours for that time, and lists which invitees can make it: a ranking that includes the date means yes, one that leaves it off means no, no ranking means unknown. The host gets an email and a board card to **confirm or reject**; rejecting and searching again gives a different venue. "Open then" comes from published hours, not a booking. The planning chat sees these results and can start a search when the host asks for a venue. Nothing about venues or vendors appears in guest invites.
 
-## Agent data stays out of the main database
-Planning chats and notes, date polls and rankings, and venue suggestions are never written to Supabase. They go to a separate Postgres set by `AGENT_DATABASE_URL` (e.g. a Neon project; tables are created on first use), or stay in memory when it's unset (`src/lib/store.ts`).
+## Neon (venue and vendor data)
+Venue and vendor suggestions live in a separate Neon Postgres, never in Supabase. `src/lib/vendors.ts` is the only module that imports `@neondatabase/serverless`, and it reads `NEON_DATABASE_URL` (the connection string, not the Neon API key). Rows carry `party_id` and `host_id` as plain uuids (no cross-database foreign keys); every route checks `currentHost` + `hostOwnsParty` before calling it, and its queries are also scoped to party and host.
+
+Schema: `neon/migrations`. Apply it before deploying, e.g. `psql "$NEON_DATABASE_URL" -f neon/migrations/20261004230000_vendors.sql` or paste it into the Neon SQL editor. In production a missing `NEON_DATABASE_URL` fails on the first vendor call (the planning chat keeps working without venue info).
+
+Planning chats, planning notes, date polls and rankings are still in memory (`src/lib/store.ts`), not in any database.
 
 ## Stack
 Next.js 15 · Supabase (Postgres, RLS, Realtime) · Vercel · Claude Sonnet 5.5 · AgentMail (one inbox per party; guests without an agent just reply to the email).
@@ -80,9 +84,9 @@ Next.js 15 · Supabase (Postgres, RLS, Realtime) · Vercel · Claude Sonnet 5.5 
 cp .env.example .env   # fill in keys
 npm install && npm run dev
 ```
-**Local test mode.** `npm run dev` with no `.env` works too. Any missing service falls back: no Supabase means an in-memory database and no sign-in, no `ANTHROPIC_API_KEY` means scripted planning questions and mock venue results (email replies go to review), and no `AGENTMAIL_API_KEY` means invite emails are printed to the server console. Fallbacks never apply to production builds; with real keys set, the real services are used.
+**Local test mode.** `npm run dev` with no `.env` works too. Any missing service falls back: no Supabase means an in-memory database and no sign-in, no `ANTHROPIC_API_KEY` means scripted planning questions and mock venue results (email replies go to review), no `AGENTMAIL_API_KEY` means invite emails are printed to the server console, and no `NEON_DATABASE_URL` means venue suggestions are kept in memory. Fallbacks never apply to production builds; with real keys set, the real services are used.
 
-Schema: `supabase/migrations`. Hosts sign in with a Supabase Auth magic link (set your project's Site URL and redirect allow-list, and custom SMTP for volume). `HOST_SECRET` remains as an optional bearer token for scripts.
+Schema: `supabase/migrations` (main database) and `neon/migrations` (venue data). Hosts sign in with a Supabase Auth magic link (set your project's Site URL and redirect allow-list, and custom SMTP for volume). `HOST_SECRET` remains as an optional bearer token for scripts.
 
 ## License
 MIT
