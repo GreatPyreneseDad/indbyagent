@@ -1,5 +1,6 @@
 import { AgentMailClient } from "agentmail";
 import { db, type Party, type Poll } from "./db";
+import type { VenueSuggestion } from "./vendors";
 import { fmtDate, fmtWhen } from "./invite";
 import { siteUrl } from "./token";
 import { fallback } from "./fallback";
@@ -60,6 +61,45 @@ export function inviteEmail(party: Party, guestName: string, url: string, datePo
     `— sent by IndbyAgent for ${party.title}`,
   ].filter((l) => l !== null).join("\n");
   return { subject, text };
+}
+
+// Tells the host a venue suggestion is waiting. Sends only from an inbox the
+// party already has (or the shared one), so it never creates or records an inbox.
+export async function notifyHostOfVenue(party: Party, s: VenueSuggestion): Promise<{ notified: "email" | "console" | "board_only"; to?: string }> {
+  const { data: host } = await db.from("hosts").select("email").eq("id", party.host_id).maybeSingle();
+  const to = host?.email as string | undefined;
+  if (!to) return { notified: "board_only" };
+  const fmtList = (xs: string[]) => xs.join(", ") || "none";
+  const subject = `Venue suggestion for ${party.title}: ${s.venue.name}`;
+  const text = [
+    `Your planning agent found a venue for ${party.title}${s.mock ? " (mock result, local test mode)" : ""}.`,
+    ``,
+    `${s.venue.name}`,
+    s.venue.address,
+    s.venue.url ?? null,
+    ``,
+    `When: ${fmtDate(s.target_time, party.timezone)}`,
+    `Open then? ${s.availability.status === "open" ? "Yes, per its published hours" : s.availability.status === "closed" ? "No, per its published hours" : "Unknown"}. ${s.availability.evidence}`,
+    `Booking isn't confirmed; ${s.availability.booking_url ? `book or ask at ${s.availability.booking_url}` : "contact the venue to book"}.`,
+    ``,
+    `Why: ${s.venue.why}`,
+    `Fit: ${s.venue.capacity_fit}${s.venue.est_cost ? ` · Est. cost: ${s.venue.est_cost}` : ""}`,
+    ``,
+    `Invitees who can make that time: ${fmtList(s.invitees.available)}`,
+    `Can't make it: ${fmtList(s.invitees.unavailable)}`,
+    `Haven't said: ${fmtList(s.invitees.unknown)}`,
+    ``,
+    ...(s.vendors.length ? [`Vendors to consider:`, ...s.vendors.map((v) => `  - ${v.category}: ${v.name}${v.url ? ` (${v.url})` : ""}: ${v.why}`), ``] : []),
+    `Confirm or reject it on your board: ${siteUrl()}/host`,
+  ].filter((l) => l !== null).join("\n");
+  if (fallback.mail) {
+    console.log(`\n----- venue notification (not sent: AgentMail not configured) -----\nTo: ${to}\nSubject: ${subject}\n\n${text}\n-----\n`);
+    return { notified: "console", to };
+  }
+  const from = party.inbox_address ?? process.env.AGENTMAIL_SHARED_INBOX;
+  if (!from) return { notified: "board_only" };
+  await mail.inboxes.messages.send(from, { to: [to], subject, text, labels: [`party:${party.id}`, "venue"] });
+  return { notified: "email", to };
 }
 
 export async function sendInvites(party: Party, guests: { id: string; name: string; email: string; token: string }[]) {

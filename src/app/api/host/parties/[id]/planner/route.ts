@@ -28,10 +28,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if ("res" in p) return p.res;
   if (!p.data.text) {
     const current = await loadPlanning(id);
-    if (current.messages.length) return NextResponse.json({ ...current, suggested_polls: [], offline: fallback.claude });
+    if (current.messages.length) return NextResponse.json({ ...current, suggested_polls: [], find_venue: false, offline: fallback.claude });
   }
   try {
-    return NextResponse.json(await planTurn(id, p.data.text));
+    return NextResponse.json(await planTurn(id, host.id, p.data.text));
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
