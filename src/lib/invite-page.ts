@@ -34,8 +34,18 @@ export function renderInvitePage(ctx: InviteCtx | null, token: string): string {
   const status = state.status ?? "pending";
   const byLine = state.by_kind ? ` · answered by ${state.by_kind === "agent" ? `${esc(state.by_name) || "an agent"} (agent)` : "you"}` : "";
 
+  const fmtOpt = (o: string) => new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: party.timezone }).format(new Date(o));
   const pollsHtml = polls.map((p) => {
     const a = answers.find((x) => x.poll_id === p.id);
+    if (p.kind === "dates") {
+      const mine = a?.ranking ?? (a?.choice ? [a.choice] : []);
+      return `<form class="card" method="post" action="${base}/polls/${p.id}/rank">
+      <div class="small">Date poll · rank the ones you can make, 1 = best</div><div style="font-weight:600;margin:2px 0 10px">${esc(p.question)}</div>
+      ${p.options.map((o) => `<label style="display:flex;gap:10px;align-items:center;margin:6px 0"><select name="rank_${p.options.indexOf(o)}" style="width:5em"><option value="">–</option>${p.options.map((_, i) => `<option value="${i + 1}" ${mine[i] === o ? "selected" : ""}>${i + 1}</option>`).join("")}</select><span>${esc(fmtOpt(o))}</span></label>`).join("")}
+      <div class="row" style="margin-top:8px"><button class="primary">Save my ranking</button></div>
+      ${mine.length ? `<div class="small" style="margin-top:8px">Your ranking: ${mine.map(fmtOpt).map(esc).join(" › ")}${a?.by_kind === "agent" ? " (by your agent)" : ""}</div>` : ""}
+    </form>`;
+    }
     return `<form class="card" method="post" action="${base}/polls/${p.id}">
       <div class="small">Poll</div><div style="font-weight:600;margin:2px 0 10px">${esc(p.question)}</div>
       <div class="row">${p.options.map((o) => `<button name="choice" value="${esc(o)}" class="${a?.choice === o ? "primary" : ""}">${esc(o)}</button>`).join("")}</div>
