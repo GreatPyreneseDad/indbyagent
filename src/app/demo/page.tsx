@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "IndbyAgent demo",
-  description: "82 seconds: a QR invite, a human RSVP, an agent RSVP over the API, an email reply parsed by Claude, and the host board. All live.",
+  description: "68 seconds: a QR invite, a human RSVP, an agent RSVP over the API, an email reply parsed by Claude, and the host board. All live.",
   openGraph: { images: ["/demo/poster.png"], videos: ["/demo/indbyagent-demo.mp4"] },
 };
 
