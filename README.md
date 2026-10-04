@@ -87,5 +87,8 @@ npm install && npm run dev
 
 Schema: `supabase/migrations` (main database) and `neon/migrations` (venue data). Hosts sign in with a Supabase Auth magic link (set your project's Site URL and redirect allow-list, and custom SMTP for volume). `HOST_SECRET` remains as an optional bearer token for scripts.
 
+## Next
+- **Vendors on the same contract.** A quote request is a link a bakery (or its agent) can read and answer: `/v/<token>` with the brief and `quote | question | decline` actions, email outreach from the party inbox, replies parsed like RSVPs, and the host clicking every commitment. Not built yet; the venue agent finds the vendors, this would let it talk to them.
+
 ## License
 MIT
