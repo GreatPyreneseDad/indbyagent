@@ -4,15 +4,22 @@ import { fastParse, llmParse } from "./parse";
 
 // Process one inbound email for a party inbox. Shared by the AgentMail webhook
 // and the host board's inbox sync. Idempotent per message_id.
-export async function processInbound(opts: { inboxId: string; messageId: string; from: string; text?: string }) {
+export async function processInbound(opts: { inboxId: string; messageId: string; from: string; subject?: string; text?: string }) {
   const { inboxId, messageId } = opts;
   const fromEmail = (opts.from.match(/<([^>]+)>/)?.[1] ?? opts.from).trim().toLowerCase();
-  const { data: party } = await db.from("parties").select("*").eq("inbox_address", inboxId).maybeSingle();
-  if (!party) return { ignored: "no party for inbox" };
-  // Already processed?
-  const { data: seen } = await db.from("messages").select("id").eq("party_id", party.id).eq("direction", "in").eq("channel", "email").like("text", `%[mid:${messageId}]%`).limit(1);
+  // An inbox may be shared by several parties: route by the sender's guest
+  // record, then by the party title in the subject line.
+  const { data: parties } = await db.from("parties").select("*").eq("inbox_address", inboxId);
+  if (!parties?.length) return { ignored: "no party for inbox" };
+  const ids = parties.map((p) => p.id);
+  const { data: seen } = await db.from("messages").select("id").in("party_id", ids).eq("direction", "in").eq("channel", "email").like("text", `%[mid:${messageId}]%`).limit(1);
   if (seen?.length) return { ignored: "duplicate" };
-  const { data: guest } = await db.from("guests").select("id,name,email,party_size_max").eq("party_id", party.id).ilike("email", fromEmail).maybeSingle();
+  const { data: matches } = await db.from("guests").select("id,name,email,party_size_max,party_id,created_at").in("party_id", ids).ilike("email", fromEmail).order("created_at", { ascending: false });
+  const subject = (opts.subject ?? "").toLowerCase();
+  const bySubject = parties.filter((p) => subject && subject.includes(String(p.title).toLowerCase()));
+  const guest = (matches ?? []).find((g) => bySubject.some((p) => p.id === g.party_id)) ?? matches?.[0] ?? null;
+  const party = guest ? parties.find((p) => p.id === guest.party_id)! : bySubject[0] ?? (parties.length === 1 ? parties[0] : null);
+  if (!party) return { ignored: "cannot attribute sender to a party" };
 
   let text = opts.text ?? "";
   if (!text) {
@@ -58,10 +65,10 @@ export async function syncInbox(partyId: string) {
   const { data: party } = await db.from("parties").select("id,inbox_address").eq("id", partyId).single();
   if (!party?.inbox_address) return { processed: 0 };
   const list = await mail.inboxes.messages.list(party.inbox_address, { labels: ["received", "unread"], limit: 20 } as never).catch(() => null);
-  const msgs = (list as { messages?: { messageId: string; from: string; text?: string; extractedText?: string }[] } | null)?.messages ?? [];
+  const msgs = (list as { messages?: { messageId: string; from: string; subject?: string; text?: string; extractedText?: string }[] } | null)?.messages ?? [];
   const results = [];
   for (const m of msgs) {
-    const r = await processInbound({ inboxId: party.inbox_address, messageId: m.messageId, from: m.from, text: m.extractedText ?? m.text });
+    const r = await processInbound({ inboxId: party.inbox_address, messageId: m.messageId, from: m.from, subject: m.subject, text: m.extractedText ?? m.text });
     results.push(r);
     await mail.inboxes.messages.update(party.inbox_address, m.messageId, { removeLabels: ["unread"] } as never).catch(() => {});
   }

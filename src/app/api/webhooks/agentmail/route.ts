@@ -21,6 +21,7 @@ export async function POST(req: NextRequest) {
     inboxId,
     messageId: m.message_id ?? m.messageId,
     from: String(m.from_ ?? m.from ?? ""),
+    subject: m.subject,
     text: m.extracted_text ?? m.extractedText ?? m.text,
   });
   return NextResponse.json({ ok: true, ...r });

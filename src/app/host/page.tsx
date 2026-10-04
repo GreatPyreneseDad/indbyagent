@@ -14,6 +14,7 @@ type Board = {
 export default function Host() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const [notice, setNotice] = useState("");
   const [me, setMe] = useState<string | null>(null);
   const [authed, setAuthed] = useState(false);
   const [parties, setParties] = useState<{ id: string; title: string }[]>([]);
@@ -77,8 +78,13 @@ export default function Host() {
   const addGuests = async (f: FormData) => {
     setErr("");
     const guests = String(f.get("guests")).split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
-      const [name, email, max] = l.split(",").map((s) => s.trim());
-      return { name, email: email || undefined, party_size_max: Number(max) || 1 };
+      // Tolerant: "Name, email, max" in any order; a bare email works too.
+      const parts = l.split(/[,\t;]+|\s{2,}/).map((s) => s.trim()).filter(Boolean);
+      const email = parts.find((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+      const max = parts.find((x) => /^\d{1,2}$/.test(x));
+      let name = parts.filter((x) => x !== email && x !== max).join(" ").replace(/[<>]/g, "").trim();
+      if (!name && email) name = email.split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      return { name: name || "Guest", email: email?.toLowerCase(), party_size_max: Number(max) || 1 };
     });
     try { const j = await api(`/api/host/parties/${partyId}/guests`, { method: "POST", body: JSON.stringify({ guests }) }); setLinks((l) => [...j.guests, ...l]); refresh(); }
     catch (e) { setErr((e as Error).message); }
@@ -95,7 +101,7 @@ export default function Host() {
   };
   const sendInvites = async () => {
     setErr("");
-    try { const j = await api(`/api/host/parties/${partyId}/invites`, { method: "POST", body: "{}" }); alert(`Sent ${j.sent} invite(s) from ${j.from}`); refresh(); }
+    try { const j = await api(`/api/host/parties/${partyId}/invites`, { method: "POST", body: "{}" }); const noEmail = board?.guests.filter((g) => !g.email).length ?? 0; setNotice(`Sent ${j.sent} invite(s) from ${j.from}.` + (j.sent === 0 && noEmail ? ` ${noEmail} guest(s) have no email address — add them again as "Name, email".` : "")); refresh(); }
     catch (e) { setErr((e as Error).message); }
   };
 
@@ -130,6 +136,7 @@ export default function Host() {
         </select>
       </header>
       {err && <p className="text-sm text-red-400">{err}</p>}
+      {notice && <p className="text-sm text-emerald-400">{notice}</p>}
 
       {!partyId && (
         <form action={createParty} className="grid gap-3 max-w-lg rounded-lg border border-neutral-800 p-4">
@@ -207,7 +214,7 @@ export default function Host() {
           <div className="grid md:grid-cols-2 gap-4">
             <form action={addGuests} className="grid gap-2 rounded-lg border border-neutral-800 p-4">
               <h3 className="font-semibold">Add guests</h3>
-              <textarea name="guests" rows={4} placeholder={"Name, email, max party size\nLeo Chen, leo@example.com, 3\nPriya, priya@example.com\nGrandma, grandma@example.com, 2"} className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-sm" />
+              <textarea name="guests" rows={4} placeholder={"One guest per line: Name, email, max party size (a bare email works)\nLeo Chen, leo@example.com, 3\nPriya, priya@example.com\nGrandma, grandma@example.com, 2"} className="rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-sm" />
               <div className="flex gap-2"><button className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium w-fit">Add</button><button type="button" onClick={sendInvites} className="rounded-md border border-neutral-700 px-4 py-2">Email invites to everyone pending</button></div>
             </form>
             <form action={addPoll} className="grid gap-2 rounded-lg border border-neutral-800 p-4">
