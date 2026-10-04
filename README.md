@@ -62,6 +62,12 @@ curl -s -X POST https://indbyagent.com/i/<token>/message -H 'content-type: appli
 ## Fast, accurate, cheap
 Claude is the last resort, not the engine. Agent RSVPs via API, button taps, and obvious email replies ("yes!", "can't make it", "tacos") cost **0 model tokens**. Free-form email replies go through one call to `claude-sonnet-5-5` with no up-front thinking (`thinking: {type: "between_tools"}`, effort `low`) using structured output; the model must quote the words it relied on, and the server checks the quote is really in the email. Low confidence → the host's review queue, never a guess. Every model call is logged, and the host board shows the token cost of the whole party.
 
+## Plan with Claude
+Creating a party opens a planning chat on the host board. Claude asks one question at a time (audience, headcount, budget, food, dietary needs, theme, schedule, venue logistics, helpers), keeps what it learns as planning notes next to the chat, and when a question is really for the guests it suggests a poll the host opens with one click. Same model setup as email parsing: Sonnet 5.5, no up-front thinking, low effort, structured output, every call logged to `llm_calls`.
+
+## Local test mode
+`npm run dev` with no `.env` works: Supabase falls back to an in-memory database with an auto-signed-in host, Claude to scripted planning questions (email replies go to review), and AgentMail to invite emails printed to the console. Each fallback turns on only when its key is missing *and* it isn't a production build.
+
 ## Stack
 Next.js 15 · Supabase (Postgres, RLS, Realtime) · Vercel · Claude Sonnet 5.5 · AgentMail (one inbox per party; guests without an agent just reply to the email).
 

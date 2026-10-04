@@ -3,6 +3,9 @@ import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { db } from "./db";
 import { safeEqual } from "./token";
+import { fallback } from "./fallback";
+
+const LOCAL_USER_ID = "00000000-0000-0000-0000-000000000001";
 
 export type Host = { id: string; auth_user_id: string | null; name: string; email: string | null };
 
@@ -26,6 +29,12 @@ export async function currentHost(req?: NextRequest): Promise<Host | null> {
   if (s && bearer && safeEqual(bearer, s)) {
     const { data } = await db.from("hosts").select("*").order("created_at").limit(1).maybeSingle();
     return (data as Host) ?? null;
+  }
+  if (fallback.db) {
+    const { data: h } = await db.from("hosts").select("*").eq("auth_user_id", LOCAL_USER_ID).maybeSingle();
+    if (h) return h as Host;
+    const { data: created } = await db.from("hosts").insert({ auth_user_id: LOCAL_USER_ID, email: "tester@localhost", name: "Local tester" }).select().single();
+    return (created as Host) ?? null;
   }
   const supa = await supaServer();
   const { data: { user } } = await supa.auth.getUser();

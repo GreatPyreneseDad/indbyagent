@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { db, type Poll } from "./db";
+import { fallback } from "./fallback";
 
 // Turning a human's email reply into structured fields.
 // Order: (1) deterministic fast path, (2) Claude Sonnet 5.5 with no up-front
@@ -43,10 +44,12 @@ export function fastParse(text: string, polls: Poll[]): Parsed | null {
   return out;
 }
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// The client throws without a key, so in Claude fallback mode there is none.
+export const anthropic = fallback.claude ? null : new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 export const MODEL = "claude-sonnet-5-5";
 
 export async function llmParse(opts: { text: string; guestName: string; partySizeMax: number; polls: Poll[]; partyId: string; purpose: string }): Promise<Parsed> {
+  if (!anthropic) return { confidence: 0, evidence: "", source: "llm" }; // goes to the host's review queue
   const schema = {
     type: "object",
     additionalProperties: false,

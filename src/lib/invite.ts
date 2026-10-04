@@ -6,7 +6,7 @@ export const SPEC_VERSION = "0.1";
 
 // ---------- lookup ----------
 
-export type InviteCtx = { party: Party; guest: Guest; state: GuestState; polls: Poll[]; answers: PollAnswer[] };
+export type InviteCtx = { party: Party; guest: Guest; state: GuestState; polls: Poll[]; answers: PollAnswer[]; locked_polls: number };
 
 export async function loadInvite(token: string): Promise<InviteCtx | null> {
   if (!looksLikeToken(token)) return null;
@@ -22,13 +22,15 @@ export async function loadInvite(token: string): Promise<InviteCtx | null> {
   // "preference" polls only to guests who said yes.
   let polls: Poll[] = [], answers: PollAnswer[] = [];
   const { data: p } = await db.from("polls").select("*").eq("party_id", party.id).eq("status", "open").order("created_at");
-  polls = ((p ?? []) as Poll[]).filter((x) => x.kind === "dates" || state.status === "yes");
+  const open = (p ?? []) as Poll[];
+  polls = open.filter((x) => x.kind === "dates" || state.status === "yes");
+  const locked_polls = open.length - polls.length;
   if (polls.length) {
     const { data: a } = await db.from("poll_state").select("poll_id,guest_id,choice,ranking,note,by_kind,by_name,channel,answered_at")
       .eq("guest_id", guest.id).in("poll_id", polls.map((x) => x.id));
     answers = (a ?? []).map((r) => ({ ...r, created_at: r.answered_at })) as PollAnswer[];
   }
-  return { party: party as Party, guest: guest as Guest, state: state as GuestState, polls, answers };
+  return { party: party as Party, guest: guest as Guest, state: state as GuestState, polls, answers, locked_polls };
 }
 
 // ---------- the invite document (what an agent reads) ----------
@@ -59,6 +61,7 @@ export function inviteJson(ctx: InviteCtx, token: string) {
     }),
   };
   if (!party.starts_at) (doc.party as Record<string, unknown>).date = "tbd";
+  if (ctx.locked_polls) doc.polls_after_yes = ctx.locked_polls; // the host has polls that unlock once you RSVP yes
   const datePolls = polls.filter((p) => p.kind === "dates"), prefPolls = polls.filter((p) => p.kind !== "dates");
   if (polls.length) {
     doc.polls = polls.map((p) => {
@@ -111,6 +114,7 @@ export function inviteText(ctx: InviteCtx, token: string): string {
       lines.push(`curl -s -X POST ${base}/polls/${p.id} -H 'content-type: application/json' -d '{"choice":"${p.options[0]}","by":{"kind":"agent","name":"YOUR_AGENT"}}'`);
     }
   }
+  if (ctx.locked_polls) lines.push(`${ctx.locked_polls} more poll${ctx.locked_polls > 1 ? "s unlock" : " unlocks"} after you RSVP yes.`);
   lines.push(`Ask the host: curl -s -X POST ${base}/message -H 'content-type: application/json' -d '{"text":"...","by":{"kind":"agent","name":"YOUR_AGENT"}}'`);
   lines.push("Rules: status must be yes|no|maybe|needs_human. choice and ranking entries must match options exactly. GET never changes anything.");
   return lines.filter((l) => l !== null).join("\n") + "\n";
@@ -135,6 +139,10 @@ export function inviteIcs(ctx: InviteCtx, token: string): string | null {
     `URL:${siteUrl()}/i/${token}`,
     "END:VEVENT", "END:VCALENDAR",
   ].filter(Boolean).join("\r\n") + "\r\n";
+}
+
+export function fmtDate(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone }).format(new Date(iso));
 }
 
 export function fmtWhen(party: Party): string {

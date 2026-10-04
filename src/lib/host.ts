@@ -15,6 +15,8 @@ export const PartyBody = z.object({
   location: z.string().trim().max(200).optional(),
   details: z.string().trim().max(1000).optional(),
   rsvp_by: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // Alternatives to starts_at. When given, invitees rank all the dates.
+  backup_dates: z.array(z.string().datetime({ offset: true })).max(7).optional(),
 });
 export const GuestsBody = z.object({
   guests: z.array(z.object({
@@ -52,6 +54,13 @@ export function tallyRanked(options: string[], answers: { ranking?: string[] | n
   }
   const ranked = [...options].sort((a, b) => score[b] - score[a] || firsts[b] - firsts[a] || options.indexOf(a) - options.indexOf(b));
   return { score, firsts, winner: answers.length ? ranked[0] : null, ranked };
+}
+
+export const DATE_POLL_QUESTION = "Which date works best for you?";
+
+// Canonical ISO options, deduped, in the order given.
+export function dateOptions(dates: string[]): string[] {
+  return [...new Set(dates.map((d) => new Date(d).toISOString()))];
 }
 
 export function slugify(s: string) {
