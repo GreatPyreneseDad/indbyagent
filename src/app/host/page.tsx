@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supaBrowser } from "@/lib/supabase-browser";
 
 type Board = {
@@ -44,10 +44,16 @@ export default function Host() {
     const q = new URLSearchParams(window.location.search); if (q.get("error")) setErr(q.get("error")!);
   }, [api]);
 
+  const sendingRef = useRef(false);
   const sendLink = async () => {
-    setErr("");
-    const { error } = await supaBrowser().auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/host` } });
-    if (error) setErr(error.message); else setSent(true);
+    const addr = email.trim().toLowerCase();
+    if (!addr || sendingRef.current) return; // one request per click; a double submit races on user creation
+    sendingRef.current = true; setErr("");
+    try {
+      const { error } = await supaBrowser().auth.signInWithOtp({ email: addr, options: { emailRedirectTo: `${window.location.origin}/host` } });
+      // A duplicate-user race means the first request already sent the link.
+      if (error && !/database error saving new user/i.test(error.message)) setErr(error.message); else setSent(true);
+    } finally { sendingRef.current = false; }
   };
 
   const refresh = useCallback(async () => {
@@ -102,7 +108,7 @@ export default function Host() {
       ) : (
         <>
           <p className="text-sm text-neutral-400">No password. We email you a link.</p>
-          <input className="w-full rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendLink()} />
+          <input className="w-full rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendLink(); } }} />
           <button onClick={sendLink} className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium">Email me a sign-in link</button>
         </>
       )}
