@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, type Party } from "@/lib/db";
-import { hostAuthed, unauthorized } from "@/lib/host";
+import { unauthorized, forbidden } from "@/lib/host";
+import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { hashToken, newToken } from "@/lib/token";
 import { sendInvites } from "@/lib/mail";
 
@@ -9,8 +10,10 @@ export const dynamic = "force-dynamic";
 // Emails every guest with an address who hasn't been invited yet. Tokens are
 // rotated at send time so the link in the email is the live one.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!hostAuthed(req)) return unauthorized();
+  const host = await currentHost(req);
+  if (!host) return unauthorized();
   const { id } = await params;
+  if (!(await hostOwnsParty(host, id))) return forbidden();
   const { data: party } = await db.from("parties").select("*").eq("id", id).single();
   if (!party) return NextResponse.json({ error: "not found" }, { status: 404 });
   const { data: invited } = await db.from("messages").select("guest_id").eq("party_id", id).eq("direction", "out").like("text", "Invite emailed%");

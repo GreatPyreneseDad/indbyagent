@@ -17,6 +17,7 @@ curl -s -X POST https://indbyagent.com/i/<token>/rsvp \\
   -d '{"status":"yes","party_size":2,"dietary":["tree nuts"],"by":{"kind":"agent","name":"Claude"}}'`}</pre>
       <div className="flex gap-3">
         <Link href="/host" className="rounded-md bg-white text-neutral-900 px-5 py-2.5 font-medium">Host a party</Link>
+        <Link href="/demo" className="rounded-md border border-neutral-700 px-5 py-2.5">Watch the demo (68 s)</Link>
         <a href="https://github.com/GreatPyreneseDad/indbyagent" className="rounded-md border border-neutral-700 px-5 py-2.5">Spec &amp; source</a>
       </div>
     </main>

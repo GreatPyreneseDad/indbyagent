@@ -1,25 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "./db";
-import { hashToken, newToken, inviteUrl, safeEqual } from "./token";
+import { hashToken, newToken, inviteUrl } from "./token";
 
-// Hackathon auth: one shared host secret (cookie or bearer). Replace with
-// Supabase Auth later; the schema already has hosts.auth_user_id for it.
-export function hostAuthed(req: NextRequest): boolean {
-  const s = process.env.HOST_SECRET;
-  if (!s) return false;
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  const cookie = req.cookies.get("host")?.value;
-  return !!((bearer && safeEqual(bearer, s)) || (cookie && safeEqual(cookie, s)));
-}
 export const unauthorized = () => NextResponse.json({ error: "unauthorized" }, { status: 401 });
-
-export async function defaultHost() {
-  const { data } = await db.from("hosts").select("*").order("created_at").limit(1).maybeSingle();
-  if (data) return data;
-  const { data: h } = await db.from("hosts").insert({ name: "Host" }).select().single();
-  return h!;
-}
+export const forbidden = () => NextResponse.json({ error: "not your party" }, { status: 403 });
 
 export const PartyBody = z.object({
   title: z.string().trim().min(1).max(120),

@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { supaBrowser } from "@/lib/supabase-browser";
 
 type Board = {
   party: { id: string; title: string; starts_at: string; location: string | null; inbox_address: string | null };
@@ -11,7 +12,9 @@ type Board = {
 };
 
 export default function Host() {
-  const [secret, setSecret] = useState("");
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [me, setMe] = useState<string | null>(null);
   const [authed, setAuthed] = useState(false);
   const [parties, setParties] = useState<{ id: string; title: string }[]>([]);
   const [partyId, setPartyId] = useState<string>("");
@@ -21,24 +24,35 @@ export default function Host() {
   const [err, setErr] = useState("");
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
-    const r = await fetch(path, { ...init, headers: { "content-type": "application/json", authorization: `Bearer ${secret}`, ...(init?.headers ?? {}) } });
+    const r = await fetch(path, { ...init, credentials: "same-origin", headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error ?? (j.issues ?? []).join("; ") ?? r.statusText);
     return j;
-  }, [secret]);
+  }, []);
 
-  useEffect(() => { try { const s = localStorage.getItem("host_secret"); if (s) setSecret(s); } catch {} }, []);
+  // On load: if a session cookie exists, we're in.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: { user } } = await supaBrowser().auth.getUser();
+        if (!user) return;
+        setMe(user.email ?? null);
+        const j = await api("/api/host/parties"); setParties(j.parties); setAuthed(true); if (j.parties[0]) setPartyId(j.parties[0].id);
+      } catch (e) { setErr((e as Error).message); }
+    })();
+    const q = new URLSearchParams(window.location.search); if (q.get("error")) setErr(q.get("error")!);
+  }, [api]);
 
-  const login = async () => {
+  const sendLink = async () => {
     setErr("");
-    try { const j = await api("/api/host/parties"); setParties(j.parties); setAuthed(true); try { localStorage.setItem("host_secret", secret); } catch {} if (j.parties[0]) setPartyId(j.parties[0].id); }
-    catch (e) { setErr((e as Error).message); }
+    const { error } = await supaBrowser().auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=/host` } });
+    if (error) setErr(error.message); else setSent(true);
   };
 
   const refresh = useCallback(async () => {
     if (!partyId) return;
     try {
-      fetch(`/api/host/parties/${partyId}/inbox`, { method: "POST", headers: { authorization: `Bearer ${secret}` } }).catch(() => {});
+      fetch(`/api/host/parties/${partyId}/inbox`, { method: "POST", credentials: "same-origin" }).catch(() => {});
       setBoard(await api(`/api/host/parties/${partyId}/board`));
     } catch (e) { setErr((e as Error).message); }
   }, [api, partyId]);
@@ -80,9 +94,17 @@ export default function Host() {
 
   if (!authed) return (
     <main className="mx-auto max-w-sm px-4 py-24 space-y-4">
-      <h1 className="text-2xl font-semibold">Host sign-in</h1>
-      <input className="w-full rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" type="password" placeholder="Host secret" value={secret} onChange={(e) => setSecret(e.target.value)} onKeyDown={(e) => e.key === "Enter" && login()} />
-      <button onClick={login} className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium">Enter</button>
+      <div className="text-xs tracking-[.14em] uppercase text-neutral-500">IndbyAgent</div>
+      <h1 className="text-2xl font-semibold">Host a party</h1>
+      {sent ? (
+        <p className="text-neutral-300">Check <b>{email}</b> for a sign-in link. It brings you straight to your board.</p>
+      ) : (
+        <>
+          <p className="text-sm text-neutral-400">No password. We email you a link.</p>
+          <input className="w-full rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendLink()} />
+          <button onClick={sendLink} className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium">Email me a sign-in link</button>
+        </>
+      )}
       {err && <p className="text-sm text-red-400">{err}</p>}
     </main>
   );
@@ -93,7 +115,8 @@ export default function Host() {
   return (
     <main className="mx-auto max-w-5xl px-4 py-10 space-y-8">
       <header className="flex flex-wrap items-center gap-3">
-        <div className="text-xs tracking-[.14em] uppercase text-neutral-500">IndbyAgent · host</div>
+        <div className="text-xs tracking-[.14em] uppercase text-neutral-500">IndbyAgent · host{me ? ` · ${me}` : ""}</div>
+        <form action="/auth/signout" method="post"><button className="text-xs text-neutral-500 underline">sign out</button></form>
         <select className="ml-auto rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2" value={partyId} onChange={(e) => { setPartyId(e.target.value); setLinks([]); }}>
           {parties.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
           <option value="">+ new party…</option>

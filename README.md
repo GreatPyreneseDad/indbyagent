@@ -64,7 +64,7 @@ Next.js 15 · Supabase (Postgres, RLS, Realtime) · Vercel · Claude Sonnet 5.5 
 cp .env.example .env   # fill in keys
 npm install && npm run dev
 ```
-Schema: `supabase/migrations`. Host sign-in uses `HOST_SECRET` for now; the schema is ready for Supabase Auth.
+Schema: `supabase/migrations`. Hosts sign in with a Supabase Auth magic link (set your project's Site URL and redirect allow-list, and custom SMTP for volume). `HOST_SECRET` remains as an optional bearer token for scripts.
 
 ## License
 MIT

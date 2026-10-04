@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { hostAuthed, unauthorized } from "@/lib/host";
+import { unauthorized, forbidden } from "@/lib/host";
+import { currentHost, hostOwnsParty } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 // Everything the host board shows, in one call. No model involved.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!hostAuthed(req)) return unauthorized();
+  const host = await currentHost(req);
+  if (!host) return unauthorized();
   const { id } = await params;
+  if (!(await hostOwnsParty(host, id))) return forbidden();
   const [party, guests, polls, pollState, messages, llm] = await Promise.all([
     db.from("parties").select("*").eq("id", id).single(),
     db.from("guest_state").select("*").eq("party_id", id).order("name"),
