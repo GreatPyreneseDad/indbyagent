@@ -61,10 +61,12 @@ curl -s -X POST https://indbyagent.com/i/<token>/message -H 'content-type: appli
 Claude is the last resort, not the engine. Agent RSVPs via API, button taps, and obvious email replies ("yes!", "can't make it", "tacos") cost **0 model tokens**. Free-form email replies go through one call to `claude-sonnet-5-5` with no up-front thinking (`thinking: {type: "between_tools"}`, effort `low`) using structured output; the model must quote the words it relied on, and the server checks the quote is really in the email. Low confidence → the host's review queue, never a guess. Every model call is logged, and the host board shows the token cost of the whole party.
 
 ## Planning with Claude
-When a host creates a party, the board opens a chat with Claude. It asks one question at a time (headcount, budget, food, theme, logistics…) and saves each answer to `parties.planning`. When a question is better answered by guests, it suggests a poll and creates it once the host agrees.
+When a host creates a party, the board opens a chat with Claude. It asks one question at a time (headcount, budget, food, theme, logistics…) and keeps each answer as the party's planning notes. When a question is better answered by guests, it suggests a poll; the host opens it with one click.
 
 ## Picking the date
 A host can add up to 7 backup dates when creating a party. Invitees then rank every date (ranked choice) from their invite link, and the invite email lists the dates. The board shows first choices and the instant-runoff leader.
+
+Planning chats, planning notes, date polls and rankings are not written to the database yet: they live in memory (`src/lib/store.ts`) and reset when the server restarts. To persist them, implement `FeatureStore` against Supabase.
 
 ## Stack
 Next.js 15 · Supabase (Postgres, RLS, Realtime) · Vercel · Claude Sonnet 5.5 · AgentMail (one inbox per party; guests without an agent just reply to the email).
@@ -74,6 +76,8 @@ Next.js 15 · Supabase (Postgres, RLS, Realtime) · Vercel · Claude Sonnet 5.5 
 cp .env.example .env   # fill in keys
 npm install && npm run dev
 ```
+**Local test mode.** `npm run dev` with no `.env` works too. Any missing service falls back: no Supabase means an in-memory database and no sign-in, no `ANTHROPIC_API_KEY` means scripted planning questions (email replies go to review), and no `AGENTMAIL_API_KEY` means invite emails are printed to the server console. Fallbacks never apply to production builds; with real keys set, the real services are used.
+
 Schema: `supabase/migrations`. Hosts sign in with a Supabase Auth magic link (set your project's Site URL and redirect allow-list, and custom SMTP for volume). `HOST_SECRET` remains as an optional bearer token for scripts.
 
 ## License

@@ -34,8 +34,7 @@ export async function processInbound(opts: { inboxId: string; messageId: string;
   await db.from("messages").insert({ party_id: party.id, guest_id: guest.id, direction: "in", text: `${text.slice(0, 1900)} [mid:${messageId}]`, by_kind: "human", channel: "email" });
 
   const { data: polls } = await db.from("polls").select("*").eq("party_id", party.id).eq("status", "open");
-  // Date rankings are entered on the invite page, not parsed from email.
-  const openPolls = ((polls ?? []) as Poll[]).filter((p) => p.kind !== "date_rank");
+  const openPolls = (polls ?? []) as Poll[];
   let parsed = fastParse(text, openPolls);
   if (!parsed) parsed = await llmParse({ text, guestName: guest.name, partySizeMax: guest.party_size_max, polls: openPolls, partyId: party.id, purpose: "email_reply" });
 

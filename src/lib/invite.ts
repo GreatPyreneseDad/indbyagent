@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { db, type Guest, type GuestState, type Party, type Poll, type PollAnswer, type ByKind, type Channel } from "./db";
+import { db, type Guest, type GuestState, type Party, type Poll, type PollAnswer, type InvitePoll, type InviteAnswer, type ByKind, type Channel } from "./db";
+import { store } from "./store";
 import { hashToken, looksLikeToken, siteUrl } from "./token";
 
 export const SPEC_VERSION = "0.1";
@@ -8,7 +9,7 @@ export const SPEC_VERSION = "0.1";
 
 // lockedPolls: how many polls the guest will see after saying yes. Date polls
 // are shown to every invitee; all other polls only to the yeses.
-export type InviteCtx = { party: Party; guest: Guest; state: GuestState; polls: Poll[]; answers: PollAnswer[]; lockedPolls: number };
+export type InviteCtx = { party: Party; guest: Guest; state: GuestState; polls: InvitePoll[]; answers: InviteAnswer[]; lockedPolls: number };
 
 export async function loadInvite(token: string): Promise<InviteCtx | null> {
   if (!looksLikeToken(token)) return null;
@@ -20,16 +21,24 @@ export async function loadInvite(token: string): Promise<InviteCtx | null> {
     db.from("guest_state").select("*").eq("guest_id", guest.id).single(),
   ]);
   if (!party || !state) return null;
-  const { data: open } = await db.from("polls").select("*").eq("party_id", party.id).eq("status", "open").order("created_at");
-  const all = (open ?? []) as Poll[];
-  const polls = state.status === "yes" ? all : all.filter((p) => p.kind === "date_rank");
-  let answers: PollAnswer[] = [];
-  if (polls.length) {
-    const { data: a } = await db.from("poll_state").select("poll_id,guest_id,choice,ranking,note,by_kind,by_name,channel,answered_at")
-      .eq("guest_id", guest.id).in("poll_id", polls.map((x) => x.id));
-    answers = (a ?? []).map((r) => ({ ...r, created_at: r.answered_at })) as PollAnswer[];
+  const [{ data: open }, datePoll] = await Promise.all([
+    db.from("polls").select("*").eq("party_id", party.id).eq("status", "open").order("created_at"),
+    store.datePoll(party.id),
+  ]);
+  const choicePolls = ((open ?? []) as Poll[]).map((p): InvitePoll => ({ ...p, kind: "choice" }));
+  const yes = state.status === "yes";
+  const polls: InvitePoll[] = [...(datePoll ? [datePoll] : []), ...(yes ? choicePolls : [])];
+  const answers: InviteAnswer[] = [];
+  if (yes && choicePolls.length) {
+    const { data: a } = await db.from("poll_state").select("poll_id,guest_id,choice,note,by_kind,by_name,channel,answered_at")
+      .eq("guest_id", guest.id).in("poll_id", choicePolls.map((x) => x.id));
+    answers.push(...((a ?? []).map((r) => ({ ...r, created_at: r.answered_at })) as PollAnswer[]));
   }
-  return { party: party as Party, guest: guest as Guest, state: state as GuestState, polls, answers, lockedPolls: all.length - polls.length };
+  if (datePoll) {
+    const mine = (await store.rankings(datePoll.id)).find((r) => r.guest_id === guest.id);
+    if (mine) answers.push({ poll_id: datePoll.id, guest_id: guest.id, choice: mine.ranking[0], ranking: mine.ranking, note: null, by_kind: mine.by_kind, by_name: mine.by_name, channel: mine.channel, created_at: mine.created_at });
+  }
+  return { party: party as Party, guest: guest as Guest, state: state as GuestState, polls, answers, lockedPolls: yes ? 0 : choicePolls.length };
 }
 
 // ---------- the invite document (what an agent reads) ----------
@@ -184,22 +193,21 @@ export async function writeRsvp(ctx: InviteCtx, body: z.infer<typeof RsvpBody>, 
 export async function writePollAnswer(ctx: InviteCtx, pollId: string, body: z.infer<typeof PollBody>, meta: WriteMeta) {
   const poll = ctx.polls.find((p) => p.id === pollId);
   if (!poll) return { error: "poll not open for this guest (RSVP yes first, and check the id)" };
-  let choice: string | undefined, ranking: string[] | null = null;
   if (poll.kind === "date_rank") {
     if (!body.ranking) return { error: `this is a ranked date poll: send ranking, best first, from: ${poll.options.join(", ")}` };
     // Accept any spelling of the same instant, store the canonical option.
     const match = (r: string) => poll.options.find((o) => o === r || new Date(o).getTime() === new Date(r).getTime());
-    ranking = body.ranking.map(match).filter((o): o is string => !!o);
+    const ranking = body.ranking.map(match).filter((o): o is string => !!o);
     if (ranking.length !== body.ranking.length) return { error: `ranking entries must be from: ${poll.options.join(", ")}` };
     if (new Set(ranking).size !== ranking.length) return { error: "ranking lists a date twice" };
-    choice = ranking[0];
-  } else {
-    if (!body.choice) return { error: `choice must be one of: ${poll.options.join(", ")}` };
-    choice = poll.options.find((o) => o.toLowerCase() === body.choice!.toLowerCase());
-    if (!choice) return { error: `choice must be one of: ${poll.options.join(", ")}` };
+    await store.saveRanking({ poll_id: poll.id, guest_id: ctx.guest.id, ranking, by_kind: body.by?.kind ?? meta.defaultKind ?? "human", by_name: body.by?.name ?? null, channel: meta.channel });
+    return { ok: true };
   }
+  if (!body.choice) return { error: `choice must be one of: ${poll.options.join(", ")}` };
+  const choice = poll.options.find((o) => o.toLowerCase() === body.choice!.toLowerCase());
+  if (!choice) return { error: `choice must be one of: ${poll.options.join(", ")}` };
   const { error } = await db.from("poll_answers").insert({
-    poll_id: poll.id, guest_id: ctx.guest.id, choice, ranking, note: body.note ?? null,
+    poll_id: poll.id, guest_id: ctx.guest.id, choice, note: body.note ?? null,
     by_kind: body.by?.kind ?? meta.defaultKind ?? "human", by_name: body.by?.name ?? null, channel: meta.channel,
     idempotency_key: meta.idempotency_key ?? null,
   });

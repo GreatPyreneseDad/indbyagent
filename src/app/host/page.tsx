@@ -5,12 +5,17 @@ import { supaBrowser } from "@/lib/supabase-browser";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Api = (path: string, init?: RequestInit) => Promise<any>;
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type SuggestedPoll = { question: string; options: string[] };
+
+// Mirrors the server's db fallback (lib/fallback.ts): no Supabase locally means
+// no sign-in, and the server treats every request as the local test host.
+const LOCAL = process.env.NODE_ENV !== "production" && !process.env.NEXT_PUBLIC_SUPABASE_URL;
 
 type Board = {
-  party: { id: string; title: string; starts_at: string; timezone: string; location: string | null; inbox_address: string | null; planning: Record<string, string> };
+  party: { id: string; title: string; starts_at: string; timezone: string; location: string | null; inbox_address: string | null };
   summary: { invited: number; yes: number; no: number; maybe: number; needs_human: number; pending: number; headcount: number; by_agent: number; by_human: number };
   guests: { guest_id: string; name: string; email: string | null; status: string | null; party_size: number | null; dietary: string[] | null; note: string | null; by_kind: string | null; by_name: string | null; channel: string | null; answered_at: string | null }[];
-  polls: { id: string; question: string; kind: "choice" | "date_rank"; created_by: "host" | "agent"; options: string[]; status: string; counts: Record<string, number>; runoff: { winner: string | null; tied: string[]; rounds: Record<string, number>[] } | null; answers: { guest_id: string; choice: string; ranking: string[] | null; by_kind: string; by_name: string | null; channel: string }[] }[];
+  polls: { id: string; question: string; kind: "choice" | "date_rank"; options: string[]; status: string; counts: Record<string, number>; runoff: { winner: string | null; tied: string[]; rounds: Record<string, number>[] } | null; answers: { guest_id: string; choice: string; ranking: string[] | null; by_kind: string; by_name: string | null; channel: string }[] }[];
   messages: { id: string; guest_id: string | null; direction: string; text: string; by_kind: string; by_name: string | null; channel: string; created_at: string }[];
   tokens: { in: number; cached: number; out: number };
 };
@@ -41,9 +46,12 @@ export default function Host() {
     if (window.location.hash.includes("access_token")) return; // SessionCatch handles this and reloads
     (async () => {
       try {
-        const { data: { user } } = await supaBrowser().auth.getUser();
-        if (!user) return;
-        setMe(user.email ?? null);
+        if (LOCAL) setMe("local test mode");
+        else {
+          const { data: { user } } = await supaBrowser().auth.getUser();
+          if (!user) return;
+          setMe(user.email ?? null);
+        }
         const j = await api("/api/host/parties"); setParties(j.parties); setAuthed(true); if (j.parties[0]) setPartyId(j.parties[0].id);
       } catch (e) { setErr((e as Error).message); }
     })();
@@ -176,7 +184,7 @@ export default function Host() {
             <div className="text-neutral-400 text-sm">{new Date(board.party.starts_at).toLocaleString()} {board.party.location ? `· ${board.party.location}` : ""} {board.party.inbox_address ? `· ${board.party.inbox_address}` : ""}</div>
           </section>
 
-          <Planner partyId={board.party.id} api={api} planning={board.party.planning ?? {}} onChange={refresh} />
+          <Planner partyId={board.party.id} api={api} onChange={refresh} />
 
           <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {[["Invited", s.invited], ["Yes", s.yes], ["Headcount", s.headcount], ["Waiting on human", s.needs_human], ["Pending", s.pending]].map(([k, v]) => (
@@ -216,7 +224,7 @@ export default function Host() {
             const r = p.runoff;
             return (
               <section key={p.id} className="rounded-lg border border-neutral-800 p-4 space-y-2">
-                <div className="flex justify-between"><h3 className="font-semibold">{p.question}{isDate && <span className="ml-2 text-xs font-normal text-neutral-500">ranked choice · all invitees</span>}{p.created_by === "agent" && <span className="ml-2 text-xs font-normal text-rose-400">from planning chat</span>}</h3><span className="text-xs text-neutral-500">{total} answered · {p.status}</span></div>
+                <div className="flex justify-between"><h3 className="font-semibold">{p.question}{isDate && <span className="ml-2 text-xs font-normal text-neutral-500">ranked choice · all invitees</span>}</h3><span className="text-xs text-neutral-500">{total} answered · {p.status}</span></div>
                 {isDate && total > 0 && r && (
                   <div className="text-sm">
                     {r.winner ? <>Leading after instant runoff: <b className="text-emerald-400">{label(r.winner)}</b>{r.rounds.length > 1 ? ` (${r.rounds.length} rounds)` : ""}</> : r.tied.length ? <>Tied: {r.tied.map(label).join(" · ")}</> : null}
@@ -273,20 +281,29 @@ function fmtDate(iso: string, timeZone: string) {
 }
 
 // Chat with Claude about the event. Opening it on a new party starts the
-// conversation; what Claude learns is saved to the party's planning notes.
-function Planner({ partyId, api, planning, onChange }: { partyId: string; api: Api; planning: Record<string, string>; onChange: () => void }) {
+// conversation. Polls Claude suggests are only opened when the host clicks.
+function Planner({ partyId, api, onChange }: { partyId: string; api: Api; onChange: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [planning, setPlanning] = useState<Record<string, string>>({});
+  const [suggested, setSuggested] = useState<SuggestedPoll[]>([]);
+  const [offline, setOffline] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [open, setOpen] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
 
+  const apply = (j: { messages: ChatMessage[]; planning: Record<string, string>; suggested_polls?: SuggestedPoll[]; offline?: boolean }) => {
+    setMessages(j.messages); setPlanning(j.planning);
+    if (j.suggested_polls?.length) setSuggested((s) => [...s, ...j.suggested_polls!]);
+    if (j.offline) setOffline(true);
+  };
+
   useEffect(() => {
     let live = true;
-    setMessages([]); setErr(""); setBusy(true);
+    setMessages([]); setPlanning({}); setSuggested([]); setErr(""); setBusy(true);
     api(`/api/host/parties/${partyId}/planner`, { method: "POST", body: "{}" })
-      .then((j) => { if (live) setMessages(j.messages); })
+      .then((j) => { if (live) apply(j); })
       .catch((e) => { if (live) setErr((e as Error).message); })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
@@ -298,20 +315,26 @@ function Planner({ partyId, api, planning, onChange }: { partyId: string; api: A
     const text = draft.trim();
     if (!text || busy) return;
     setDraft(""); setErr(""); setBusy(true);
-    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", text }]);
+    setMessages((m) => [...m, { id: `pending-${Date.now()}`, role: "user", text }]);
+    try { apply(await api(`/api/host/parties/${partyId}/planner`, { method: "POST", body: JSON.stringify({ text }) })); }
+    catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  };
+
+  const openPoll = async (p: SuggestedPoll) => {
+    setErr("");
     try {
-      const j = await api(`/api/host/parties/${partyId}/planner`, { method: "POST", body: JSON.stringify({ text }) });
-      setMessages(j.messages);
+      await api(`/api/host/parties/${partyId}/polls`, { method: "POST", body: JSON.stringify(p) });
+      setSuggested((s) => s.filter((x) => x !== p));
       onChange();
     } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(false); }
   };
 
   const notes = Object.entries(planning);
   return (
     <section className="rounded-lg border border-rose-900/50 p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold">Plan with Claude</h3>
+        <h3 className="font-semibold">Plan with Claude{offline && <span className="ml-2 text-xs font-normal text-amber-300">scripted (no Claude key)</span>}</h3>
         <button onClick={() => setOpen((o) => !o)} className="text-xs text-neutral-500 underline">{open ? "hide" : "show"}</button>
       </div>
       {open && (
@@ -324,6 +347,13 @@ function Planner({ partyId, api, planning, onChange }: { partyId: string; api: A
               {busy && <div className="text-xs text-neutral-500">Claude is thinking…</div>}
               <div ref={endRef} />
             </div>
+            {suggested.map((p) => (
+              <div key={p.question} className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-800 px-3 py-2 text-sm">
+                <span className="text-neutral-500">Suggested poll:</span> {p.question} <span className="text-neutral-500">({p.options.join(" / ")})</span>
+                <button onClick={() => openPoll(p)} className="ml-auto rounded-md bg-white text-neutral-900 px-3 py-1 text-xs font-medium">Open poll</button>
+                <button onClick={() => setSuggested((s) => s.filter((x) => x !== p))} className="text-xs text-neutral-500 underline">dismiss</button>
+              </div>
+            ))}
             <div className="flex gap-2">
               <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} rows={2} placeholder="Answer Claude, or tell it anything about the event…" className="flex-1 rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-sm" />
               <button onClick={send} disabled={busy || !draft.trim()} className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium disabled:opacity-50">Send</button>
@@ -331,7 +361,7 @@ function Planner({ partyId, api, planning, onChange }: { partyId: string; api: A
             {err && <p className="text-sm text-red-400">{err}</p>}
           </div>
           <div className="text-sm space-y-1">
-            <div className="text-xs uppercase tracking-[.14em] text-neutral-500">Saved to this event</div>
+            <div className="text-xs uppercase tracking-[.14em] text-neutral-500">Planning notes (not saved to the database)</div>
             {notes.length ? notes.map(([k, v]) => <div key={k}><span className="text-neutral-500">{k.replace(/_/g, " ")}:</span> {v}</div>) : <div className="text-neutral-600">Nothing yet. Answers you give Claude show up here.</div>}
           </div>
         </div>

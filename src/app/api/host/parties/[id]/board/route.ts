@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { unauthorized, forbidden } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { instantRunoff } from "@/lib/ranked";
+import { store } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +27,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const rows = (pollState.data ?? []).filter((r) => r.poll_id === p.id && r.choice);
     const counts: Record<string, number> = Object.fromEntries(p.options.map((o: string) => [o, 0]));
     for (const r of rows) counts[r.choice] = (counts[r.choice] ?? 0) + 1;
-    const runoff = p.kind === "date_rank" ? instantRunoff(p.options, rows.map((r) => r.ranking ?? [r.choice])) : null;
-    return { ...p, counts, runoff, answers: rows.map((r) => ({ guest_id: r.guest_id, choice: r.choice, ranking: r.ranking, note: r.note, by_kind: r.by_kind, by_name: r.by_name, channel: r.channel })) };
+    return { ...p, kind: "choice", counts, runoff: null, answers: rows.map((r) => ({ guest_id: r.guest_id, choice: r.choice, note: r.note, by_kind: r.by_kind, by_name: r.by_name, channel: r.channel })) };
   });
+  const datePoll = await store.datePoll(id);
+  if (datePoll) {
+    const rankings = await store.rankings(datePoll.id);
+    const counts: Record<string, number> = Object.fromEntries(datePoll.options.map((o) => [o, 0]));
+    for (const r of rankings) counts[r.ranking[0]]++;
+    tally.unshift({
+      ...datePoll, counts, runoff: instantRunoff(datePoll.options, rankings.map((r) => r.ranking)),
+      answers: rankings.map((r) => ({ guest_id: r.guest_id, choice: r.ranking[0], ranking: r.ranking, note: null, by_kind: r.by_kind, by_name: r.by_name, channel: r.channel })),
+    });
+  }
   const tokens = (llm.data ?? []).reduce((a, r) => ({ in: a.in + r.input_tokens, cached: a.cached + r.cache_read_tokens, out: a.out + r.output_tokens }), { in: 0, cached: 0, out: 0 });
   const summary = {
     invited: g.length,
