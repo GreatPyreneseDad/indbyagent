@@ -1,6 +1,7 @@
 import { AgentMailClient } from "agentmail";
 import { db, type Party, type Poll } from "./db";
 import type { VenueSuggestion } from "./vendors";
+import type { VendorRequest } from "./vendor-requests";
 import { fmtDate, fmtWhen } from "./invite";
 import { siteUrl } from "./token";
 import { fallback } from "./fallback";
@@ -117,4 +118,31 @@ export async function sendInvites(party: Party, guests: { id: string; name: stri
     sent++;
   }
   return { from, sent };
+}
+
+// Request for quote to a vendor. Templated: zero model tokens.
+export async function sendVendorRequest(party: Party, r: VendorRequest, url: string) {
+  const from = await ensureInbox(party);
+  const when = party.starts_at ? fmtDate(party.starts_at, party.timezone) : "date not final yet";
+  const subject = `Quote request: ${r.vendor.category} for ${party.title} [IndbyAgent V-${r.id.slice(0, 8)}]`;
+  const text = [
+    `Hello ${r.vendor.name},`,
+    ``,
+    `I'm hosting ${party.title} (${when}${party.location ? `, ${party.location}` : ""}) and would like a quote.`,
+    ``,
+    `What we need: ${r.need}`,
+    r.budget_line ? `Budget line: ${r.budget_line}` : null,
+    r.needed_by ? `Needed by: ${r.needed_by}` : null,
+    ``,
+    `Reply with a price and whether you're available here (this link is yours alone): ${url}`,
+    `Or just reply to this email with your price, availability and any notes.`,
+    `If you have an assistant or agent, it can read ${url}.json and answer for you.`,
+    ``,
+    `A quote isn't a booking; I'll confirm in writing before anything is reserved or paid.`,
+    ``,
+    `— sent by IndbyAgent for ${party.title}`,
+  ].filter((l) => l !== null).join("\n");
+  if (fallback.mail) { console.log(`\n----- vendor request (not sent: AgentMail not configured) -----\nTo: ${r.vendor.email}\nSubject: ${subject}\n\n${text}\n-----\n`); return { from: CONSOLE_INBOX }; }
+  await mail.inboxes.messages.send(from, { to: [r.vendor.email!], subject, text, labels: [`vendor:${r.id}`, `party:${party.id}`] });
+  return { from };
 }

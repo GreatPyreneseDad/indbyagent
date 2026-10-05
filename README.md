@@ -69,7 +69,7 @@ Creating a party opens a planning chat on the host board. Claude asks one questi
 From the host board, "Find a venue" sends an agent (Claude with web search) to find one venue near the party plus a few vendors (cake, entertainment, supplies). It targets the leading date in the ranked date poll (or the party's date), checks the venue's published hours for that time, and lists which invitees can make it: a ranking that includes the date means yes, one that leaves it off means no, no ranking means unknown. The host gets an email and a board card to **confirm or reject**; rejecting and searching again gives a different venue. "Open then" comes from published hours, not a booking. The planning chat sees these results and can start a search when the host asks for a venue. Nothing about venues or vendors appears in guest invites.
 
 ## Neon (venue and vendor data)
-Venue and vendor suggestions live in a separate Neon Postgres, never in Supabase. `src/lib/vendors.ts` is the only module that imports `@neondatabase/serverless`, and it reads `NEON_DATABASE_URL` (the connection string, not the Neon API key). Rows carry `party_id` and `host_id` as plain uuids (no cross-database foreign keys); every route checks `currentHost` + `hostOwnsParty` before calling it, and its queries are also scoped to party and host.
+Venue and vendor suggestions live in a separate Neon Postgres, never in Supabase. `src/lib/neon.ts` is the only module that imports `@neondatabase/serverless` (used by `vendors.ts`, `vendor-requests.ts`, `payments.ts`), and it reads `NEON_DATABASE_URL` (the connection string, not the Neon API key). Rows carry `party_id` and `host_id` as plain uuids (no cross-database foreign keys); every route checks `currentHost` + `hostOwnsParty` before calling it, and its queries are also scoped to party and host.
 
 Schema: `neon/migrations`. Apply it before deploying, e.g. `psql "$NEON_DATABASE_URL" -f neon/migrations/20261004230000_vendors.sql` or paste it into the Neon SQL editor. In production a missing `NEON_DATABASE_URL` fails on the first vendor call (the planning chat keeps working without venue info).
 
@@ -87,8 +87,33 @@ npm install && npm run dev
 
 Schema: `supabase/migrations` (main database) and `neon/migrations` (venue data). Hosts sign in with a Supabase Auth magic link (set your project's Site URL and redirect allow-list, and custom SMTP for volume). `HOST_SECRET` remains as an optional bearer token for scripts.
 
+## Vendors on the same contract
+A request for quote is a link a bakery (or its agent) can read and answer. The host creates one per vendor × need (`POST /api/host/parties/<id>/vendors`), sends it (`…/vendors/<rid>/send` emails it from the party inbox when the vendor has an address, otherwise hands back the link), and the vendor side is `/v/<token>`: HTML for a person, `.json`/`.txt` for an agent, with `quote | question | decline` actions and a schema that returns self-correcting 400s. The host accepts one vendor per category; accepting sends nothing and pays nothing by itself. Vendor data lives in Neon next to the venue suggestions.
+
+```bash
+curl -s https://indbyagent.com/v/<token>.json
+curl -s -X POST https://indbyagent.com/v/<token>/quote -H 'content-type: application/json' \
+  -d '{"price":120,"currency":"usd","available":"yes","lead_time_days":3,"notes":"nut-free is fine","by":{"kind":"agent","name":"Bakery bot"}}'
+```
+
+## Payments: the host authorizes, the agent executes inside the envelope
+Money moves only inside an envelope the host creates for one **accepted** vendor request: a hard cap, a currency, an expiry, a provider. An agent (or the host) can then execute payments against it; every attempt, including refusals, is a row in `payment_attempts`.
+
+```bash
+# host: authorize up to $150 for 48 h
+curl -s -X POST …/api/host/parties/<id>/vendors/<rid>/payments -H "authorization: Bearer $HOST" \
+  -H 'content-type: application/json' -d '{"max_amount":150,"purpose":"cake deposit + balance","expires_in_hours":48}'
+# agent: pay the $60 deposit (idempotent), later the $90 balance; $100 more would be refused
+curl -s -X POST …/vendors/<rid>/payments/<aid> -H "authorization: Bearer $HOST" -H 'idempotency-key: dep1' \
+  -H 'content-type: application/json' -d '{"amount":60,"by":{"kind":"agent","name":"Claude"}}'
+# host: revoke at any time; GET …/payments/<aid> is the audit trail
+```
+
+Providers: `manual` (default) records the intent and tells the host how to pay the vendor directly; the host marks it settled (`PATCH /api/host/parties/<id>/payments/<attemptId>`). `stripe` charges a payment method the host saved with Stripe (`payment_method_ref`, optionally `cus_…:pm_…`), off-session, when `STRIPE_SECRET_KEY` is set; 3-D Secure comes back as `requires_action` for the host to finish in Stripe. This code never sees card details.
+
 ## Next
-- **Vendors on the same contract.** A quote request is a link a bakery (or its agent) can read and answer: `/v/<token>` with the brief and `quote | question | decline` actions, email outreach from the party inbox, replies parsed like RSVPs, and the host clicking every commitment. Not built yet; the venue agent finds the vendors, this would let it talk to them.
+- Inbound vendor email: route replies by sender or the `[IndbyAgent V-xxxx]` subject tag into a `quote` parser (fast path, then one Sonnet 5.5 call with verbatim evidence), with the review queue on low confidence.
+- Board card for vendor requests and payments; planner hook (`request_quotes`).
 
 ## License
 MIT

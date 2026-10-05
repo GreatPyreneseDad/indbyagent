@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { neon } from "@neondatabase/serverless";
 import { db, type GuestState, type Party, type Poll } from "./db";
 import { anthropic, MODEL } from "./parse";
 import { fmtDate } from "./invite";
 import { tallyRanked } from "./host";
 import { fallback } from "./fallback";
+import { sql } from "./neon";
 import { store } from "./store";
 
 // A guest's ranked answer to the party's "dates" poll (from poll_state).
@@ -36,12 +36,6 @@ const iso = (v: unknown) => (v == null ? null : new Date(v as string).toISOStrin
 type Row = Omit<VenueSuggestion, "created_at" | "decided_at" | "target_time"> & { created_at: unknown; decided_at: unknown; target_time: unknown };
 const fromRow = (r: Row): VenueSuggestion => ({ ...r, created_at: iso(r.created_at)!, decided_at: iso(r.decided_at), target_time: iso(r.target_time)! });
 
-// Outside dev a missing NEON_DATABASE_URL throws here, on the first vendor call.
-function sql() {
-  const url = process.env.NEON_DATABASE_URL;
-  if (!url) throw new Error("NEON_DATABASE_URL is not set; venue suggestions need the Neon database");
-  return neon(url);
-}
 
 const g = globalThis as typeof globalThis & { __indbyagentVenues?: VenueSuggestion[] };
 const mem = (g.__indbyagentVenues ??= []);
