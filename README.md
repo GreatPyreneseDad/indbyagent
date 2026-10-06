@@ -14,7 +14,11 @@ One person carries a QR (`/m/<slug>?c=<room>`). Someone scans it, lands on a pag
 - `POST /m/<slug>/drop` — `{agent_address, name?, note?, wants?, scopes?, context?}`; form or JSON.
 - `GET /m/<slug>/qr?c=<code>` (`&png=1`, `&svg=1`) — the owner's QR for a lock screen.
 - Host: `GET/POST /api/host/meet` (cards), `POST /api/host/meet/<slug>/contexts` (rooms).
-- Schema: `neon/migrations/20261006180000_meet.sql`.
+- Schema: `neon/migrations/20261006180000_meet.sql`, `20261006210000_meet_agent.sql`.
+
+**The owner's agent.** Give the card an `agent_brief` (who you are, what you are building, who you want to meet, what the agent may never say) and it runs on Claude Sonnet 5.5: it writes the intro from the brief and the scanner's note, proposes times, answers questions from the brief, and hands off to your `reply_to` inbox the moment a human decision is needed (a picked time, terms, anything outside the brief). Every message is logged on the meet (`meet_messages`); a `stop` from the other side ends the thread. Without a brief or a key it falls back to a template and costs nothing.
+
+**The funnel.** Every page and every intro carries a "get your own card" link (`/host?from=meet&via=<slug>`). The person who was scanned can have the same thing two minutes later.
 
 ## The invite, four ways
 

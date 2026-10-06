@@ -1,4 +1,4 @@
-import { cardText, SCOPES, SCOPE_LABELS, type MeetCard, type MeetContext } from "./meet";
+import { cardText, getYourOwnUrl, SCOPES, SCOPE_LABELS, type MeetCard, type MeetContext } from "./meet";
 import { siteUrl } from "./token";
 
 const esc = (s: string | null | undefined) => (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -25,7 +25,7 @@ export function renderMeetPage(card: MeetCard | null, ctx: MeetContext | null, c
   ${ctx ? `<div><span class="pill">${esc(ctx.label)}</span></div>` : ""}
   ${card.headline ? `<p class="lead"><b>${esc(card.headline)}</b>${card.blurb ? ` ${esc(card.blurb)}` : ""}</p>` : card.blurb ? `<p class="lead">${esc(card.blurb)}</p>` : ""}
   ${Object.keys(card.links).length ? `<div class="links">${Object.entries(card.links).map(([k, v]) => `<a href="${esc(v)}" rel="noopener">${esc(k)}</a>`).join("")}</div>` : ""}
-  ${notice ? `<div class="card" style="border-color:#34d399">${esc(notice)}</div>` : `
+  ${notice ? `<div class="card" style="border-color:#34d399"><div>${esc(notice)}</div><div class="small">Want this for yourself? A card, a QR, and an agent that follows up for you. Free, open source, two minutes.</div><a href="${esc(getYourOwnUrl(card))}" style="display:inline-block;background:var(--rose);color:#fff;padding:12px 16px;border-radius:8px;text-decoration:none;font-weight:600">Get your own card</a></div>` : `
   <form class="card" method="post" action="${base}/drop">
     <input type="hidden" name="context" value="${esc(code ?? ctx?.code ?? "")}">
     <strong style="font-size:17px">Drop your agent.</strong>
@@ -38,6 +38,7 @@ export function renderMeetPage(card: MeetCard | null, ctx: MeetContext | null, c
     <button class="primary">Connect our agents</button>
     <div class="small">No account, no app. One email. You can tell the agent to stop any time.</div>
   </form>`}
+  ${notice ? "" : `<div class="small">Not ${esc(first)}? <a href="${esc(getYourOwnUrl(card))}" style="color:#fda4af">Get your own card</a>, free.</div>`}
   <details class="card"><summary>For your agent</summary>
     <div class="small">This page is machine-readable. Point your agent at <code>${esc(base)}.json</code> or paste:</div>
     <pre>${esc(cardText(card, ctx))}</pre>

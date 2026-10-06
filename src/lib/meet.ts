@@ -15,14 +15,16 @@ export type MeetCard = {
   id: string; host_id: string; slug: string; display_name: string;
   headline: string | null; blurb: string | null;
   links: Record<string, string>; inbox_address: string | null; reply_to: string | null; agent_url: string | null;
+  agent_brief: string | null; agent_model: string;
   created_at: string;
 };
 export type MeetContext = { id: string; card_id: string; code: string; label: string; starts_at: string | null; ends_at: string | null; created_at: string };
-export type MeetStatus = "dropped" | "sent" | "replied" | "scheduled" | "closed";
+export type MeetStatus = "dropped" | "sent" | "replied" | "scheduled" | "needs_human" | "closed" | "stopped";
 export type Meet = {
   id: string; card_id: string; context_id: string | null; context_label: string | null;
   name: string | null; agent_address: string; email: string | null; note: string | null;
   scopes: string[]; wants: string | null; status: MeetStatus; intro_message_id: string | null;
+  summary: string | null; proposed_times: string[] | null;
   created_at: string; sent_at: string | null; replied_at: string | null;
 };
 
@@ -35,9 +37,9 @@ export const SCOPE_LABELS: Record<(typeof SCOPES)[number], string> = {
 };
 
 const iso = (v: unknown) => (v == null ? null : new Date(v as string).toISOString());
-const fixCard = (r: Record<string, unknown>): MeetCard => ({ ...(r as MeetCard), links: (r.links as Record<string, string>) ?? {}, created_at: iso(r.created_at)! });
+const fixCard = (r: Record<string, unknown>): MeetCard => ({ ...(r as MeetCard), links: (r.links as Record<string, string>) ?? {}, agent_brief: (r.agent_brief as string) ?? null, agent_model: (r.agent_model as string) || "claude-sonnet-5-5", created_at: iso(r.created_at)! });
 const fixCtx = (r: Record<string, unknown>): MeetContext => ({ ...(r as MeetContext), created_at: iso(r.created_at)!, starts_at: iso(r.starts_at), ends_at: iso(r.ends_at) });
-const fixMeet = (r: Record<string, unknown>): Meet => ({ ...(r as Meet), scopes: (r.scopes as string[]) ?? [], created_at: iso(r.created_at)!, sent_at: iso(r.sent_at), replied_at: iso(r.replied_at) });
+const fixMeet = (r: Record<string, unknown>): Meet => ({ ...(r as Meet), scopes: (r.scopes as string[]) ?? [], summary: (r.summary as string) ?? null, proposed_times: (r.proposed_times as string[]) ?? null, created_at: iso(r.created_at)!, sent_at: iso(r.sent_at), replied_at: iso(r.replied_at) });
 
 // ---------- bodies ----------
 
@@ -63,6 +65,8 @@ export const CardBody = z.object({
   inbox_address: z.string().email().optional(),
   reply_to: z.string().email().optional(),
   agent_url: z.string().url().optional(),
+  agent_brief: z.string().trim().max(12000).optional(),
+  agent_model: z.string().trim().max(60).optional(),
 }).strict();
 
 export const ContextBody = z.object({
@@ -80,6 +84,12 @@ export async function loadCard(slug: string): Promise<MeetCard | null> {
   return rows[0] ? fixCard(rows[0] as Record<string, unknown>) : null;
 }
 
+export async function loadCardByInbox(inbox: string): Promise<MeetCard | null> {
+  if (neonFallback()) return table<MeetCard>("meet_cards").find((c) => c.inbox_address === inbox) ?? null;
+  const rows = await sql()`select * from meet_cards where inbox_address = ${inbox} order by created_at limit 1`;
+  return rows[0] ? fixCard(rows[0] as Record<string, unknown>) : null;
+}
+
 export async function listCards(hostId: string): Promise<MeetCard[]> {
   if (neonFallback()) return table<MeetCard>("meet_cards").filter((c) => c.host_id === hostId);
   const rows = await sql()`select * from meet_cards where host_id = ${hostId} order by created_at`;
@@ -93,13 +103,15 @@ export async function upsertCard(hostId: string, body: z.infer<typeof CardBody>)
     id: existing?.id ?? randomUUID(), host_id: hostId, slug: body.slug, display_name: body.display_name,
     headline: body.headline ?? null, blurb: body.blurb ?? null, links: body.links,
     inbox_address: body.inbox_address ?? existing?.inbox_address ?? null, reply_to: body.reply_to ?? existing?.reply_to ?? null, agent_url: body.agent_url ?? null,
+    agent_brief: body.agent_brief ?? existing?.agent_brief ?? null, agent_model: body.agent_model ?? existing?.agent_model ?? "claude-sonnet-5-5",
     created_at: existing?.created_at ?? new Date().toISOString(),
   };
   if (neonFallback()) { const t = table<MeetCard>("meet_cards"); const i = t.findIndex((x) => x.id === c.id); if (i >= 0) t[i] = c; else t.push(c); return c; }
-  await sql()`insert into meet_cards (id, host_id, slug, display_name, headline, blurb, links, inbox_address, reply_to, agent_url, created_at)
-    values (${c.id}, ${c.host_id}, ${c.slug}, ${c.display_name}, ${c.headline}, ${c.blurb}, ${JSON.stringify(c.links)}, ${c.inbox_address}, ${c.reply_to}, ${c.agent_url}, ${c.created_at})
+  await sql()`insert into meet_cards (id, host_id, slug, display_name, headline, blurb, links, inbox_address, reply_to, agent_url, agent_brief, agent_model, created_at)
+    values (${c.id}, ${c.host_id}, ${c.slug}, ${c.display_name}, ${c.headline}, ${c.blurb}, ${JSON.stringify(c.links)}, ${c.inbox_address}, ${c.reply_to}, ${c.agent_url}, ${c.agent_brief}, ${c.agent_model}, ${c.created_at})
     on conflict (slug) do update set display_name = excluded.display_name, headline = excluded.headline, blurb = excluded.blurb, links = excluded.links,
-      inbox_address = coalesce(excluded.inbox_address, meet_cards.inbox_address), reply_to = coalesce(excluded.reply_to, meet_cards.reply_to), agent_url = excluded.agent_url`;
+      inbox_address = coalesce(excluded.inbox_address, meet_cards.inbox_address), reply_to = coalesce(excluded.reply_to, meet_cards.reply_to), agent_url = excluded.agent_url,
+      agent_brief = coalesce(excluded.agent_brief, meet_cards.agent_brief), agent_model = excluded.agent_model`;
   return c;
 }
 
@@ -137,7 +149,7 @@ export async function createMeet(card: MeetCard, ctx: MeetContext | null, body: 
   const m: Meet = {
     id: randomUUID(), card_id: card.id, context_id: ctx?.id ?? null, context_label: ctx?.label ?? null,
     name: body.name || null, agent_address: body.agent_address.toLowerCase(), email: body.email ?? (body.agent_address.includes("@") ? body.agent_address.toLowerCase() : null),
-    note: body.note || null, scopes: body.scopes, wants: body.wants || null, status: "dropped", intro_message_id: null,
+    note: body.note || null, scopes: body.scopes, wants: body.wants || null, status: "dropped", intro_message_id: null, summary: null, proposed_times: null,
     created_at: new Date().toISOString(), sent_at: null, replied_at: null,
   };
   if (neonFallback()) { table<Meet>("meets").push(m); return m; }
@@ -153,6 +165,10 @@ export async function markIntroSent(id: string, messageId: string | null) {
 }
 
 // ---------- documents ----------
+
+// Every intro and every thank-you page carries this: the person on the other
+// side can have the same thing in two minutes.
+export const getYourOwnUrl = (via: MeetCard) => `${siteUrl()}/host?from=meet&via=${encodeURIComponent(via.slug)}`;
 
 export const cardUrl = (card: MeetCard, code?: string | null) => `${siteUrl()}/m/${card.slug}${code ? `?c=${encodeURIComponent(code)}` : ""}`;
 
@@ -172,6 +188,7 @@ export function cardJson(card: MeetCard, ctx: MeetContext | null) {
       },
     },
     formats: { json: `${base}.json`, text: `${base}.txt` },
+    get_your_own: { url: getYourOwnUrl(card), what: "a card like this one: a QR, a page, and an agent that follows up for you (open source, indbyagent.com)" },
   };
 }
 
@@ -203,6 +220,7 @@ export function introMail(card: MeetCard, m: Meet) {
     met_at: m.context_label, their_note: m.note, they_want: m.wants, scopes: m.scopes,
     proposed: m.scopes.includes("schedule") ? { kind: "call", duration_min: 30, window: "this week", respond: "reply with 2-3 times or a scheduling link" } : { kind: "follow_up" },
     reply: { how: "reply to this email; an agent may answer with JSON in the body", include: ["times or link", "what you want from this", "anything to send"] },
+    get_your_own: getYourOwnUrl(card),
   };
   const text = [
     `Hi ${who},`,
@@ -217,6 +235,8 @@ export function introMail(card: MeetCard, m: Meet) {
     m.wants ? `You said you want: ${m.wants}. I'll make sure that's what we talk about.` : null,
     ``,
     ...Object.entries(card.links).map(([k, v]) => `${k}: ${v}`),
+    ``,
+    `Want this for yourself? A card, a QR, and an agent that follows up for you, free and open source: ${getYourOwnUrl(card)}`,
     ``,
     `If you have an agent, the block below is for it.`,
     ``,

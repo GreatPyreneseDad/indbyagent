@@ -1,12 +1,26 @@
 import { db, type Poll } from "./db";
 import { mail } from "./mail";
 import { fastParse, llmParse } from "./parse";
+import { loadCardByInbox } from "./meet";
+import { findMeetByTag } from "./meet-agent";
+import { handleMeetInbound } from "./meet-mail";
 
 // Process one inbound email for a party inbox. Shared by the AgentMail webhook
 // and the host board's inbox sync. Idempotent per message_id.
 export async function processInbound(opts: { inboxId: string; messageId: string; from: string; subject?: string; text?: string }) {
   const { inboxId, messageId } = opts;
   const fromEmail = (opts.from.match(/<([^>]+)>/)?.[1] ?? opts.from).trim().toLowerCase();
+  // Meet replies (person-to-person intros) first: by subject tag, else by the
+  // inbox's card + sender. Falls through to party routing if neither matches.
+  {
+    const text0 = opts.text ?? (await mail.inboxes.messages.get(inboxId, messageId).catch(() => null))?.extractedText ?? "";
+    const tagged = await findMeetByTag(opts.subject ?? "").catch(() => null);
+    const card = tagged?.card ?? (await loadCardByInbox(inboxId).catch(() => null));
+    if (card) {
+      const r = await handleMeetInbound(card, { messageId, from: opts.from, subject: opts.subject ?? "", text: text0 });
+      if (!("ignored" in r) || r.ignored !== "no meet for sender") return { meet: r };
+    }
+  }
   // An inbox may be shared by several parties: route by the sender's guest
   // record, then by the party title in the subject line.
   const { data: parties } = await db.from("parties").select("*").eq("inbox_address", inboxId);

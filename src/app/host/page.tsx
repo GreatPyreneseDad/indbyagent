@@ -43,6 +43,7 @@ export default function Host() {
   const [err, setErr] = useState("");
   const [backups, setBackups] = useState<number[]>([]);
   const [venueRequest, setVenueRequest] = useState(0);
+  const [fromMeet, setFromMeet] = useState(false);
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const r = await fetch(path, { ...init, credentials: "same-origin", headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
@@ -66,6 +67,8 @@ export default function Host() {
       } catch (e) { setErr((e as Error).message); }
     })();
     const q = new URLSearchParams(window.location.search); if (q.get("error")) setErr(q.get("error")!);
+    if (q.get("from") === "meet") { setFromMeet(true); try { sessionStorage.setItem("indby.fromMeet", "1"); } catch {} }
+    else { try { if (sessionStorage.getItem("indby.fromMeet")) setFromMeet(true); } catch {} }
   }, [api]);
 
   const sendingRef = useRef(false);
@@ -139,7 +142,8 @@ export default function Host() {
   if (!authed) return (
     <main className="mx-auto max-w-sm px-4 py-24 space-y-4">
       <div className="text-xs tracking-[.14em] uppercase text-neutral-500">IndbyAgent</div>
-      <h1 className="text-2xl font-semibold">Host a party</h1>
+      <h1 className="text-2xl font-semibold">{fromMeet ? "Get your own Meet card" : "Host a party"}</h1>
+      {fromMeet && !sent && <p className="text-sm text-neutral-400">A QR, a page, and an agent that writes the follow-up for you. Sign in and you'll have one in two minutes.</p>}
       {sent ? (
         <p className="text-neutral-300">Check <b>{email}</b> for a sign-in link. It brings you straight to your board.</p>
       ) : (
@@ -168,6 +172,8 @@ export default function Host() {
       </header>
       {err && <p className="text-sm text-red-400">{err}</p>}
       {notice && <p className="text-sm text-emerald-400">{notice}</p>}
+
+      <MeetCardPanel api={api} open={fromMeet} defaultEmail={me} />
 
       {!partyId && (
         <form action={createParty} className="grid gap-3 max-w-lg rounded-lg border border-neutral-800 p-4">
@@ -531,3 +537,90 @@ function VenueAgent({ partyId, timezone, api, request }: { partyId: string; time
 
 const DEMO_LABEL = "Demo result: a real place, not a live search (no Claude key)";
 const mapsUrl = (s: VenueSuggestion) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${s.venue.name}, ${s.venue.address}`)}`;
+
+type MeetCardT = { id: string; slug: string; display_name: string; headline: string | null; blurb: string | null; links: Record<string, string>; agent_brief: string | null; reply_to: string | null; url: string; qr: string;
+  contexts: { id: string; code: string; label: string }[];
+  meets: { id: string; name: string | null; agent_address: string; context_label: string | null; status: string; summary: string | null; created_at: string }[] };
+
+// Your Meet card: the QR you carry, and everyone who scanned it.
+function MeetCardPanel({ api, open, defaultEmail }: { api: Api; open: boolean; defaultEmail: string | null }) {
+  const [cards, setCards] = useState<MeetCardT[] | null>(null);
+  const [show, setShow] = useState(open);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [room, setRoom] = useState("");
+  const load = useCallback(async () => { try { const j = await api("/api/host/meet"); setCards(j.cards); if (j.cards.length) setShow(true); } catch (e) { setErr((e as Error).message); } }, [api]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (open) setShow(true); }, [open]);
+  const card = cards?.[0] ?? null;
+
+  const create = async (f: FormData) => {
+    setBusy(true); setErr("");
+    const links: Record<string, string> = {};
+    for (const k of ["linkedin", "site"]) { const v = String(f.get(k) ?? "").trim(); if (v) links[k] = v.startsWith("http") ? v : `https://${v}`; }
+    const body = {
+      slug: String(f.get("slug") ?? "").trim().toLowerCase(), display_name: String(f.get("display_name") ?? "").trim(),
+      headline: String(f.get("headline") ?? "").trim() || undefined, blurb: String(f.get("blurb") ?? "").trim() || undefined,
+      links, reply_to: String(f.get("reply_to") ?? "").trim() || undefined, agent_brief: String(f.get("agent_brief") ?? "").trim() || undefined,
+    };
+    try { await api("/api/host/meet", { method: "POST", body: JSON.stringify(body) }); await load(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const addRoom = async () => {
+    if (!card || !room.trim()) return;
+    const code = room.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "room";
+    try { await api(`/api/host/meet/${card.slug}/contexts`, { method: "POST", body: JSON.stringify({ code, label: room.trim() }) }); setRoom(""); await load(); } catch (e) { setErr((e as Error).message); }
+  };
+  if (cards === null) return null;
+  if (!show) return <button onClick={() => setShow(true)} className="text-sm text-rose-400 underline w-fit">Your Meet card: a QR people scan to connect their agent to yours</button>;
+  const field = "rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2";
+  return (
+    <section className="rounded-lg border border-neutral-800 p-4 grid gap-3">
+      <div className="flex items-baseline gap-3"><h2 className="font-semibold">Your Meet card</h2><span className="text-xs text-neutral-500">a QR, a page, and your agent writing the follow-up</span></div>
+      {err && <p className="text-sm text-red-400">{err}</p>}
+      {!card ? (
+        <form action={create} className="grid gap-2 max-w-xl">
+          <div className="grid grid-cols-2 gap-2">
+            <input name="display_name" required placeholder="Your name" className={field} />
+            <input name="slug" required pattern="[a-z0-9][a-z0-9-]{1,40}" placeholder="your-handle (indbyagent.com/m/…)" className={field} />
+          </div>
+          <input name="headline" placeholder="One line: what you're building" className={field} />
+          <textarea name="blurb" rows={2} placeholder="Two sentences people should know" className={field} />
+          <div className="grid grid-cols-2 gap-2">
+            <input name="linkedin" placeholder="linkedin.com/in/…" className={field} />
+            <input name="site" placeholder="your site" className={field} />
+          </div>
+          <input name="reply_to" type="email" defaultValue={defaultEmail ?? ""} placeholder="Your email, for handoffs from your agent" className={field} />
+          <textarea name="agent_brief" rows={5} placeholder="Brief your agent. Who you are, what you want from the people you meet, what it may offer, what it must never say. The more here, the better it writes." className={field} />
+          <button disabled={busy} className="rounded-md bg-white text-neutral-900 px-4 py-2 font-medium w-fit">{busy ? "Creating…" : "Create my card"}</button>
+          <p className="text-xs text-neutral-500">Your agent (Claude Sonnet 5.5) writes from an IndbyAgent inbox and hands anything that needs you to the email above. Open source, MIT.</p>
+        </form>
+      ) : (
+        <div className="grid md:grid-cols-[200px_1fr] gap-4">
+          <div className="grid gap-2">
+            <a href={card.qr} target="_blank" rel="noopener" className="block bg-white rounded-lg p-2"><img src={`${card.qr}?svg=1`} alt="Your Meet QR" className="w-full" /></a>
+            <a href={card.url} className="text-xs text-rose-400 underline break-all">{card.url.replace(/^https?:\/\//, "")}</a>
+            <a href={`${card.qr}?png=1`} download={`meet-${card.slug}.png`} className="text-xs text-neutral-400 underline">Download PNG for your lock screen</a>
+          </div>
+          <div className="grid gap-3">
+            <div><div className="font-medium">{card.display_name}</div>{card.headline && <div className="text-sm text-neutral-400">{card.headline}</div>}</div>
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="text-xs text-neutral-500">Rooms:</span>
+              {card.contexts.map((c) => <a key={c.id} href={`${card.qr}?c=${encodeURIComponent(c.code)}`} target="_blank" rel="noopener" className="text-xs rounded-full border border-neutral-700 px-2 py-0.5 hover:border-rose-400">{c.label}</a>)}
+              <input value={room} onChange={(e) => setRoom(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addRoom(); } }} placeholder="+ add a room (its own QR)" className="rounded-md bg-neutral-900 border border-neutral-800 px-2 py-1 text-xs w-56" />
+            </div>
+            <div className="text-xs text-neutral-500">{card.meets.length} scan{card.meets.length === 1 ? "" : "s"}</div>
+            <ul className="grid gap-2 max-h-72 overflow-auto pr-1">
+              {card.meets.map((m) => (
+                <li key={m.id} className="rounded-md border border-neutral-800 p-2 text-sm">
+                  <div className="flex gap-2 items-baseline"><span className="font-medium">{m.name ?? m.agent_address}</span>{m.name && <span className="text-xs text-neutral-500">{m.agent_address}</span>}<span className={`ml-auto text-xs ${m.status === "needs_human" ? "text-amber-300" : m.status === "replied" || m.status === "scheduled" ? "text-emerald-400" : "text-neutral-500"}`}>{m.status.replace("_", " ")}</span></div>
+                  <div className="text-xs text-neutral-500">{m.context_label ?? "no room"} · {new Date(m.created_at).toLocaleString()}</div>
+                  {m.summary && <div className="text-xs text-neutral-300 mt-1">{m.summary}</div>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
