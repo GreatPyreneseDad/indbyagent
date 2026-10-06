@@ -6,6 +6,16 @@ A guest opens `https://indbyagent.com/i/<token>` and sees the party. A guest's *
 
 Built at SF Tech Week 2026 (Build Personal Agents Hack). Inspired by the agent design of [Bullpen](https://bullpen.sale).
 
+## Meet: the invite contract pointed at a person
+
+One person carries a QR (`/m/<slug>?c=<room>`). Someone scans it, lands on a page that already knows where you met, and drops an address their agent reads (an email is enough). The card owner's agent writes the first follow-up from the owner's inbox: human-readable, with a JSON block (`IndbyAgent/Meet.Intro`) the other agent can act on. Only the owner installs anything.
+
+- `GET /m/<slug>` (`.json`, `.txt`) — the card as a person or an agent reads it; `?c=<code>` names the room.
+- `POST /m/<slug>/drop` — `{agent_address, name?, note?, wants?, scopes?, context?}`; form or JSON.
+- `GET /m/<slug>/qr?c=<code>` (`&png=1`, `&svg=1`) — the owner's QR for a lock screen.
+- Host: `GET/POST /api/host/meet` (cards), `POST /api/host/meet/<slug>/contexts` (rooms).
+- Schema: `neon/migrations/20261006180000_meet.sql`.
+
 ## The invite, four ways
 
 | Request | You get |

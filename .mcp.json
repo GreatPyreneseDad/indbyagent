@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "executor": {
+      "command": "/Users/chris/party-agent/.tooling/bin/executor",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "HOME": "/Users/chris/party-agent/.sandbox/home"
+      }
+    }
+  }
+}
