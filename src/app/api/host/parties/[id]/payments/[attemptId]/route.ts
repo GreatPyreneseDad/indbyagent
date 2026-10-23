@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, forbidden } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { settle } from "@/lib/payments";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string; attemptId: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id, attemptId } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const t = await settle(id, host.id, attemptId);

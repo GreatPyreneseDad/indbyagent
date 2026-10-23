@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, forbidden, GuestsBody, createGuests } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { parseBody } from "@/lib/http";
+import { guestCap } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const p = await parseBody(req, GuestsBody);
   if ("res" in p) return p.res;
+  const capped = await guestCap(host, id, p.data.guests.length);
+  if (capped) return capped;
   try {
     const guests = await createGuests(id, p.data.guests);
     return NextResponse.json({ guests }, { status: 201 });

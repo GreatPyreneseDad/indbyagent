@@ -4,12 +4,14 @@ import { unauthorized } from "@/lib/host";
 import { currentHost } from "@/lib/auth";
 import { parseBody } from "@/lib/http";
 import { CardBody, listCards, listContexts, listMeets, upsertCard, cardUrl } from "@/lib/meet";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   try {
     const cards = await listCards(host.id);
     const out = await Promise.all(cards.map(async (c) => ({ ...c, url: cardUrl(c), qr: `${cardUrl(c)}/qr`, contexts: await listContexts(c.id), meets: await listMeets(c.id) })));
@@ -20,6 +22,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const p = await parseBody(req, CardBody);
   if ("res" in p) return p.res;
   try {

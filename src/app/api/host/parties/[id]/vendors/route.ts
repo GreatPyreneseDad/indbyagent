@@ -5,6 +5,7 @@ import { parseBody } from "@/lib/http";
 import { RequestCreateBody, createRequest, listRequests, listReplies } from "@/lib/vendor-requests";
 import { listAuthorizations, listAttempts } from "@/lib/payments";
 import { siteUrl } from "@/lib/token";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   try {
@@ -33,6 +35,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const p = await parseBody(req, RequestCreateBody);

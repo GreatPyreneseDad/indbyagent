@@ -4,12 +4,14 @@ import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { parseBody, idem } from "@/lib/http";
 import { getRequest } from "@/lib/vendor-requests";
 import { ExecuteBody, execute, listAuthorizations, listAttempts, revoke } from "@/lib/payments";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
 async function gate(req: NextRequest, params: Promise<{ id: string; rid: string; aid: string }>) {
   const host = await currentHost(req);
   if (!host) return { res: unauthorized() };
+  { const blocked = agentBlocked(host); if (blocked) return { res: blocked }; }
   const { id, rid, aid } = await params;
   if (!(await hostOwnsParty(host, id))) return { res: forbidden() };
   const r = await getRequest(id, host.id, rid);

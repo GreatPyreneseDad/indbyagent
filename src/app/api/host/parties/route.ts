@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { unauthorized, PartyBody, slugify, dateOptions, DATE_POLL_QUESTION } from "@/lib/host";
 import { currentHost } from "@/lib/auth";
 import { parseBody } from "@/lib/http";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  const blocked = agentBlocked(host);
+  if (blocked) return blocked;
   const p = await parseBody(req, PartyBody);
   if ("res" in p) return p.res;
   const { backup_dates, ...fields } = p.data;

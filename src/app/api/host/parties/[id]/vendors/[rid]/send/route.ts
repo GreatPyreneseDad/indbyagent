@@ -5,6 +5,7 @@ import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { getRequest, markSent, rotateToken } from "@/lib/vendor-requests";
 import { sendVendorRequest } from "@/lib/mail";
 import { siteUrl } from "@/lib/token";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string; rid: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id, rid } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const r = await getRequest(id, host.id, rid);

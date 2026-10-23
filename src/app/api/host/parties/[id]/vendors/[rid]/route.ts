@@ -3,6 +3,7 @@ import { unauthorized, forbidden } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { parseBody } from "@/lib/http";
 import { RequestPatchBody, patchRequest } from "@/lib/vendor-requests";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ export const dynamic = "force-dynamic";
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string; rid: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id, rid } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const p = await parseBody(req, RequestPatchBody);

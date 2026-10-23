@@ -5,6 +5,7 @@ import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { parseBody } from "@/lib/http";
 import { loadPlanning, planTurn } from "@/lib/planner";
 import { fallback } from "@/lib/fallback";
+import { llmCap } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const current = await loadPlanning(id);
     if (current.messages.length) return NextResponse.json({ ...current, suggested_polls: [], find_venue: false, offline: fallback.claude });
   }
+  const capped = await llmCap(host, id);
+  if (capped) return capped;
   try {
     return NextResponse.json(await planTurn(id, host.id, p.data.text));
   } catch (e) {

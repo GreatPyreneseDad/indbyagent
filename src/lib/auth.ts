@@ -2,12 +2,16 @@ import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { db } from "./db";
-import { safeEqual } from "./token";
+import { safeEqual, hashToken } from "./token";
 import { fallback } from "./fallback";
 
 const LOCAL_USER_ID = "00000000-0000-0000-0000-000000000001";
 
-export type Host = { id: string; auth_user_id: string | null; name: string; email: string | null };
+// scope_party_id is set when the request came in with an agent host token:
+// that host may touch exactly one party and nothing else.
+export type Host = { id: string; auth_user_id: string | null; name: string; email: string | null; scope_party_id?: string };
+
+export const HOST_TOKEN_PREFIX = "iba_";
 
 // Server-side Supabase client bound to the request's auth cookies.
 export async function supaServer() {
@@ -23,9 +27,16 @@ export async function supaServer() {
 // Who is the host making this request?
 // 1) A signed-in Supabase user (magic link) -> their hosts row (created on first sign-in).
 // 2) Bearer HOST_SECRET (ops/scripts) -> the first host row.
+// 3) Bearer iba_<token> (agent skill) -> that party's host, scoped to that party.
 export async function currentHost(req?: NextRequest): Promise<Host | null> {
   const s = process.env.HOST_SECRET;
-  const bearer = req?.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  const bearer = req?.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (bearer?.startsWith(HOST_TOKEN_PREFIX)) {
+    const { data: party } = await db.from("parties").select("id,host_id").eq("host_token_hash", hashToken(bearer)).maybeSingle();
+    if (!party) return null;
+    const { data: h } = await db.from("hosts").select("*").eq("id", party.host_id).maybeSingle();
+    return h ? ({ ...(h as Host), scope_party_id: party.id as string }) : null;
+  }
   if (s && bearer && safeEqual(bearer, s)) {
     const { data } = await db.from("hosts").select("*").order("created_at").limit(1).maybeSingle();
     return (data as Host) ?? null;
@@ -46,6 +57,7 @@ export async function currentHost(req?: NextRequest): Promise<Host | null> {
 }
 
 export async function hostOwnsParty(host: Host, partyId: string): Promise<boolean> {
+  if (host.scope_party_id && host.scope_party_id !== partyId) return false;
   const { data } = await db.from("parties").select("id").eq("id", partyId).eq("host_id", host.id).maybeSingle();
   return !!data;
 }

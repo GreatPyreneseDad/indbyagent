@@ -9,7 +9,7 @@ type Result = { data: unknown; error: { message: string; code?: string } | null;
 
 const DEFAULTS: Record<string, Row> = {
   hosts: {},
-  parties: { timezone: "America/Los_Angeles", kind: null, ends_at: null, location: null, details: null, rsvp_by: null, inbox_address: null, join_token_hash: null, join_enabled: true, join_max: 300 },
+  parties: { timezone: "America/Los_Angeles", kind: null, ends_at: null, location: null, details: null, rsvp_by: null, inbox_address: null, join_token_hash: null, join_enabled: true, join_max: 300, host_token_hash: null, board_token_hash: null, created_via: "web", created_ip: null },
   guests: { email: null, phone: null, party_size_max: 1, token_revoked_at: null, self_joined: false },
   rsvps: { party_size: null, dietary: [], note: null, by_name: null, idempotency_key: null },
   polls: { closes_at: null, status: "open", kind: "preference" },
@@ -22,7 +22,7 @@ const DEFAULTS: Record<string, Row> = {
 };
 const UNIQUE: Record<string, string[][]> = {
   hosts: [["auth_user_id"]],
-  parties: [["slug"], ["join_token_hash"]],
+  parties: [["slug"], ["join_token_hash"], ["host_token_hash"], ["board_token_hash"]],
   guests: [["token_hash"]],
   rsvps: [["guest_id", "idempotency_key"]],
   poll_answers: [["poll_id", "guest_id", "idempotency_key"]],
@@ -98,6 +98,7 @@ class Query implements PromiseLike<Result> {
   upsert(row: Row) { this.op = "upsert"; this.payload = row; return this; }
   delete() { this.op = "delete"; return this; }
   eq(col: string, v: unknown) { this.filters.push((r) => r[col] === v); return this; }
+  gte(col: string, v: string | number) { this.filters.push((r) => (r[col] as string | number) >= v); return this; }
   in(col: string, vs: unknown[]) { this.filters.push((r) => vs.includes(r[col])); return this; }
   like(col: string, p: string) { const re = likeToRegex(p, "s"); this.filters.push((r) => re.test(String(r[col] ?? ""))); return this; }
   ilike(col: string, p: string) { const re = likeToRegex(p, "is"); this.filters.push((r) => re.test(String(r[col] ?? ""))); return this; }

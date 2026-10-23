@@ -4,12 +4,14 @@ import { unauthorized, forbidden } from "@/lib/host";
 import { currentHost } from "@/lib/auth";
 import { parseBody, notFound } from "@/lib/http";
 import { ContextBody, loadCard, upsertContext, cardUrl } from "@/lib/meet";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { slug } = await params;
   const card = await loadCard(slug);
   if (!card) return notFound();

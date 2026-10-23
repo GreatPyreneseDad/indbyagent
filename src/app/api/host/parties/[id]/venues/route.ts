@@ -4,6 +4,7 @@ import { unauthorized, forbidden } from "@/lib/host";
 import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { listSuggestions, suggestVenue } from "@/lib/vendors";
 import { notifyHostOfVenue } from "@/lib/mail";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120; // web search takes a while
@@ -11,6 +12,7 @@ export const maxDuration = 120; // web search takes a while
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   try {
@@ -24,6 +26,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   try {

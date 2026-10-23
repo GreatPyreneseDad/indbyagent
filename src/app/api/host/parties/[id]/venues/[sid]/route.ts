@@ -5,6 +5,7 @@ import { currentHost, hostOwnsParty } from "@/lib/auth";
 import { parseBody } from "@/lib/http";
 import { store } from "@/lib/store";
 import { decideSuggestion } from "@/lib/vendors";
+import { agentBlocked } from "@/lib/agent-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ const DecisionBody = z.object({ decision: z.enum(["confirm", "reject"]) }).stric
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string; sid: string }> }) {
   const host = await currentHost(req);
   if (!host) return unauthorized();
+  { const blocked = agentBlocked(host); if (blocked) return blocked; }
   const { id, sid } = await params;
   if (!(await hostOwnsParty(host, id))) return forbidden();
   const p = await parseBody(req, DecisionBody);
