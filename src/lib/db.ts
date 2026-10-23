@@ -1,13 +1,16 @@
-import { createClient } from "@supabase/supabase-js";
-
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { localDb } from "./local-db";
+import { fallback } from "./fallback";
 // Service-role client for server code only. Guest access is authorized by the
 // per-guest token (checked in code), host access by HOST_SECRET. Never import
 // this from a client component.
-export const db = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false, autoRefreshToken: false } },
-);
+
+export const db: SupabaseClient = fallback
+  ? (localDb as unknown as SupabaseClient)
+  : createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { persistSession: false, autoRefreshToken: false } },);
 
 export type RsvpStatus = "pending" | "yes" | "no" | "maybe" | "needs_human";
 export type ByKind = "agent" | "human" | "host";
@@ -29,4 +32,6 @@ export type GuestState = {
 };
 export type PollKind = "preference" | "dates";
 export type Poll = { id: string; party_id: string; question: string; options: string[]; closes_at: string | null; status: "open" | "closed"; kind: PollKind };
+export const pollIsOpen = (p: Poll, now = Date.now()) =>
+  p.status === "open" && (!p.closes_at || Date.parse(p.closes_at) > now);
 export type PollAnswer = { poll_id: string; guest_id: string; choice: string; ranking: string[] | null; note: string | null; by_kind: ByKind; by_name: string | null; channel: Channel; created_at: string };
