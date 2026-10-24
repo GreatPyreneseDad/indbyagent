@@ -1,5 +1,8 @@
 import { db, type Poll } from "./db";
 import { mail, partyTagOf } from "./mail";
+import { ownClientForInbox } from "./own-inbox";
+
+const clientFor = async (inboxId: string) => (await ownClientForInbox(inboxId).catch(() => null)) ?? mail;
 import { fastParse, llmParse } from "./parse";
 import { loadCardByInbox } from "./meet";
 import { findMeetByTag } from "./meet-agent";
@@ -13,7 +16,7 @@ export async function processInbound(opts: { inboxId: string; messageId: string;
   // Meet replies (person-to-person intros) first: by subject tag, else by the
   // inbox's card + sender. Falls through to party routing if neither matches.
   {
-    const text0 = opts.text ?? (await mail.inboxes.messages.get(inboxId, messageId).catch(() => null))?.extractedText ?? "";
+    const text0 = opts.text ?? (await (await clientFor(inboxId)).inboxes.messages.get(inboxId, messageId).catch(() => null))?.extractedText ?? "";
     const tagged = await findMeetByTag(opts.subject ?? "").catch(() => null);
     const card = tagged?.card ?? (await loadCardByInbox(inboxId).catch(() => null));
     if (card) {
@@ -23,8 +26,17 @@ export async function processInbound(opts: { inboxId: string; messageId: string;
   }
   // An inbox may be shared by several parties: route by the sender's guest
   // record, then by the party title in the subject line.
-  const { data: parties } = await db.from("parties").select("*").eq("inbox_address", inboxId);
-  if (!parties?.length) return { ignored: "no party for inbox" };
+  const { data: byInbox } = await db.from("parties").select("*").eq("inbox_address", inboxId);
+  // A tagged reply can arrive on an overflow inbox the party doesn't hold
+  // (its own inbox hit a send limit): find the party by the tag's id prefix.
+  const tag0 = partyTagOf(opts.subject ?? "");
+  let parties = byInbox ?? [];
+  if (tag0 && !parties.some((p) => String(p.id).replace(/-/g, "").startsWith(tag0))) {
+    const lo = `${tag0}-0000-0000-0000-000000000000`, hi = `${tag0}-ffff-ffff-ffff-ffffffffffff`;
+    const { data: tagged } = await db.from("parties").select("*").gte("id", lo).lte("id", hi).limit(2);
+    if (tagged?.length === 1) parties = [...parties, tagged[0]];
+  }
+  if (!parties.length) return { ignored: "no party for inbox" };
   const ids = parties.map((p) => p.id);
   const { data: seen } = await db.from("messages").select("id").in("party_id", ids).eq("direction", "in").eq("channel", "email").like("text", `%[mid:${messageId}]%`).limit(1);
   if (seen?.length) return { ignored: "duplicate" };
@@ -41,7 +53,7 @@ export async function processInbound(opts: { inboxId: string; messageId: string;
 
   let text = opts.text ?? "";
   if (!text) {
-    const full = await mail.inboxes.messages.get(inboxId, messageId).catch(() => null);
+    const full = await (await clientFor(inboxId)).inboxes.messages.get(inboxId, messageId).catch(() => null);
     text = full?.extractedText ?? full?.text ?? "";
   }
   text = text.replace(/\r/g, "").trim();
@@ -82,13 +94,14 @@ export async function processInbound(opts: { inboxId: string; messageId: string;
 export async function syncInbox(partyId: string) {
   const { data: party } = await db.from("parties").select("id,inbox_address").eq("id", partyId).single();
   if (!party?.inbox_address) return { processed: 0 };
-  const list = await mail.inboxes.messages.list(party.inbox_address, { labels: ["received", "unread"], limit: 20 } as never).catch(() => null);
+  const client = await clientFor(party.inbox_address);
+  const list = await client.inboxes.messages.list(party.inbox_address, { labels: ["received", "unread"], limit: 20 } as never).catch(() => null);
   const msgs = (list as { messages?: { messageId: string; from: string; subject?: string; text?: string; extractedText?: string }[] } | null)?.messages ?? [];
   const results = [];
   for (const m of msgs) {
     const r = await processInbound({ inboxId: party.inbox_address, messageId: m.messageId, from: m.from, subject: m.subject, text: m.extractedText ?? m.text });
     results.push(r);
-    await mail.inboxes.messages.update(party.inbox_address, m.messageId, { removeLabels: ["unread"] } as never).catch(() => {});
+    await client.inboxes.messages.update(party.inbox_address, m.messageId, { removeLabels: ["unread"] } as never).catch(() => {});
   }
   return { processed: results.filter((r) => "written" in r).length, results };
 }

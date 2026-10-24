@@ -60,5 +60,6 @@ export async function POST(req: NextRequest) {
     api,
     limits: { guests: AGENT_LIMITS.guests_per_party, planner_calls: AGENT_LIMITS.llm_calls_per_party },
     next: [`POST ${api}/guests`, `POST ${api}/invites`, `GET ${api}/board`],
+    own_inbox: { url: `${siteUrl()}/api/host/inbox`, how: "Optional. POST { email } to sign the host up for their own AgentMail inbox in their name; AgentMail emails them a 6-digit code; POST { otp } to finish. Until then invites send from an IndbyAgent inbox." },
   }, { status: 201, headers: { "cache-control": "no-store" } });
 }

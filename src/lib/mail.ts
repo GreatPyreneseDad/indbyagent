@@ -5,6 +5,7 @@ import type { VendorRequest } from "./vendor-requests";
 import { fmtDate, fmtWhen } from "./invite";
 import { siteUrl } from "./token";
 import { fallback } from "./fallback";
+import { accountForHost, ownClientForInbox, isLimitError } from "./own-inbox";
 
 export const mail = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY ?? "" });
 const CONSOLE_INBOX = "server console";
@@ -20,6 +21,13 @@ export async function ensureInbox(party: Party): Promise<string> {
   if (fallback.mail) return CONSOLE_INBOX;
   if (party.inbox_address) return party.inbox_address;
   let address: string | undefined;
+  // The host's own verified AgentMail inbox, if they set one up.
+  const { data: host } = await db.from("hosts").select("id,email,auth_user_id").eq("id", party.host_id).maybeSingle();
+  const own = host ? await accountForHost(host as { id: string; email: string | null; auth_user_id: string | null }) : null;
+  if (own?.status === "verified") {
+    await db.from("parties").update({ inbox_address: own.inbox_id }).eq("id", party.id);
+    return own.inbox_id;
+  }
   try {
     const inbox = await mail.inboxes.create({
       username: party.slug.replace(/[^a-z0-9-]/g, "").slice(0, 30),
@@ -39,7 +47,7 @@ export async function ensureInbox(party: Party): Promise<string> {
 // that no live party holds. A party stops holding its inbox 14 days after it
 // starts; an undated party holds it until then. The inbox is renamed to the
 // party title so guests see the party as the sender.
-async function claimPooledInbox(party: Party): Promise<string | null> {
+export async function claimPooledInbox(party: Party): Promise<string | null> {
   const pool = (process.env.AGENTMAIL_POOL_INBOXES ?? "").split(",").map((x) => x.trim()).filter(Boolean);
   if (!pool.length) return null;
   const cutoff = Date.now() - 14 * 864e5;
@@ -49,6 +57,27 @@ async function claimPooledInbox(party: Party): Promise<string | null> {
   if (!free) return null;
   await mail.inboxes.update(free, { displayName: party.title.slice(0, 60) }).catch(() => {});
   return free;
+}
+
+// Send from a party's inbox. A subscriber's own inbox sends with their key; if
+// AgentMail refuses it for a plan or new-account ramp limit, the message goes
+// out from an IndbyAgent inbox instead (pool, then shared). Replies still route
+// to the party by the subject tag.
+type SendBody = { to: string[]; subject: string; text: string; labels?: string[] };
+export async function sendFrom(party: Party, from: string, body: SendBody): Promise<string> {
+  const own = await ownClientForInbox(from).catch(() => null);
+  if (!own) { await mail.inboxes.messages.send(from, body); return from; }
+  try {
+    await own.inboxes.messages.send(from, body);
+    return from;
+  } catch (e) {
+    if (!isLimitError(e)) throw e;
+    const alt = (await claimPooledInbox(party)) ?? process.env.AGENTMAIL_SHARED_INBOX;
+    if (!alt) throw e;
+    const subject = body.subject.includes(partyTag(party.id)) ? body.subject : `${body.subject} ${partyTag(party.id)}`;
+    await mail.inboxes.messages.send(alt, { ...body, subject, labels: [...(body.labels ?? []), "overflow"] });
+    return alt;
+  }
 }
 
 // Invite copy is templated, not generated: zero model tokens per guest.
@@ -118,7 +147,7 @@ export async function notifyHostOfVenue(party: Party, s: VenueSuggestion): Promi
   }
   const from = party.inbox_address ?? process.env.AGENTMAIL_SHARED_INBOX;
   if (!from) return { notified: "board_only" };
-  await mail.inboxes.messages.send(from, { to: [to], subject, text, labels: [`party:${party.id}`, "venue"] });
+  await sendFrom(party, from, { to: [to], subject, text, labels: [`party:${party.id}`, "venue"] });
   return { notified: "email", to };
 }
 
@@ -132,7 +161,7 @@ export async function sendInvites(party: Party, guests: { id: string; name: stri
     const url = `${siteUrl()}/i/${g.token}`;
     const { subject, text } = inviteEmail(party, g.name, url, datePolls, count);
     if (fallback.mail) console.log(`\n----- invite email (not sent: AgentMail not configured) -----\nTo: ${g.email}\nSubject: ${subject}\n\n${text}\n-----\n`);
-    else await mail.inboxes.messages.send(from, { to: [g.email], subject, text, labels: [`guest:${g.id}`, `party:${party.id}`] });
+    else await sendFrom(party, from, { to: [g.email], subject, text, labels: [`guest:${g.id}`, `party:${party.id}`] });
     await db.from("messages").insert({ party_id: party.id, guest_id: g.id, direction: "out", text: `Invite emailed to ${g.email}`, by_kind: "host", channel: "email" });
     sent++;
   }
@@ -162,6 +191,6 @@ export async function sendVendorRequest(party: Party, r: VendorRequest, url: str
     `— sent by IndbyAgent for ${party.title}`,
   ].filter((l) => l !== null).join("\n");
   if (fallback.mail) { console.log(`\n----- vendor request (not sent: AgentMail not configured) -----\nTo: ${r.vendor.email}\nSubject: ${subject}\n\n${text}\n-----\n`); return { from: CONSOLE_INBOX }; }
-  await mail.inboxes.messages.send(from, { to: [r.vendor.email!], subject, text, labels: [`vendor:${r.id}`, `party:${party.id}`] });
+  await sendFrom(party, from, { to: [r.vendor.email!], subject, text, labels: [`vendor:${r.id}`, `party:${party.id}`] });
   return { from };
 }
