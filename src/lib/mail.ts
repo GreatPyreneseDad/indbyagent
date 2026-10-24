@@ -28,12 +28,27 @@ export async function ensureInbox(party: Party): Promise<string> {
     });
     address = inbox.inboxId;
   } catch (e) {
-    const shared = process.env.AGENTMAIL_SHARED_INBOX;
-    if (!shared) throw e;
-    address = shared;
+    address = (await claimPooledInbox(party)) ?? process.env.AGENTMAIL_SHARED_INBOX;
+    if (!address) throw e;
   }
   await db.from("parties").update({ inbox_address: address }).eq("id", party.id);
   return address;
+}
+
+// Plan inbox limit hit: reuse an inbox from AGENTMAIL_POOL_INBOXES (comma list)
+// that no live party holds. A party stops holding its inbox 14 days after it
+// starts; an undated party holds it until then. The inbox is renamed to the
+// party title so guests see the party as the sender.
+async function claimPooledInbox(party: Party): Promise<string | null> {
+  const pool = (process.env.AGENTMAIL_POOL_INBOXES ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (!pool.length) return null;
+  const cutoff = Date.now() - 14 * 864e5;
+  const { data: holders } = await db.from("parties").select("inbox_address,starts_at").in("inbox_address", pool);
+  const busy = new Set((holders ?? []).filter((h) => !h.starts_at || Date.parse(h.starts_at) > cutoff).map((h) => h.inbox_address));
+  const free = pool.find((a) => !busy.has(a));
+  if (!free) return null;
+  await mail.inboxes.update(free, { displayName: party.title.slice(0, 60) }).catch(() => {});
+  return free;
 }
 
 // Invite copy is templated, not generated: zero model tokens per guest.
