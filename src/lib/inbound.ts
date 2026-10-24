@@ -1,5 +1,5 @@
 import { db, type Poll } from "./db";
-import { mail } from "./mail";
+import { mail, partyTagOf } from "./mail";
 import { fastParse, llmParse } from "./parse";
 import { loadCardByInbox } from "./meet";
 import { findMeetByTag } from "./meet-agent";
@@ -30,8 +30,12 @@ export async function processInbound(opts: { inboxId: string; messageId: string;
   if (seen?.length) return { ignored: "duplicate" };
   const { data: matches } = await db.from("guests").select("id,name,email,party_size_max,party_id,created_at").in("party_id", ids).ilike("email", fromEmail).order("created_at", { ascending: false });
   const subject = (opts.subject ?? "").toLowerCase();
-  const bySubject = parties.filter((p) => subject && subject.includes(String(p.title).toLowerCase()));
-  const guest = (matches ?? []).find((g) => bySubject.some((p) => p.id === g.party_id)) ?? matches?.[0] ?? null;
+  // A party tag in the subject beats everything; then the party title.
+  const tag = partyTagOf(subject);
+  const byTag = tag ? parties.filter((p) => String(p.id).replace(/-/g, "").slice(0, 8).toLowerCase() === tag) : [];
+  const bySubject = byTag.length ? byTag : parties.filter((p) => subject && subject.includes(String(p.title).toLowerCase()));
+  const inTagged = (matches ?? []).find((g) => bySubject.some((p) => p.id === g.party_id)) ?? null;
+  const guest = byTag.length ? inTagged : inTagged ?? matches?.[0] ?? null;
   const party = guest ? parties.find((p) => p.id === guest.party_id)! : bySubject[0] ?? (parties.length === 1 ? parties[0] : null);
   if (!party) return { ignored: "cannot attribute sender to a party" };
 

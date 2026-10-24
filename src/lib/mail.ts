@@ -9,6 +9,10 @@ import { fallback } from "./fallback";
 export const mail = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY ?? "" });
 const CONSOLE_INBOX = "server console";
 
+// Subject tag that pins a reply to its party even when parties share an inbox.
+export const partyTag = (id: string) => `[IndbyAgent P-${id.replace(/-/g, "").slice(0, 8)}]`;
+export const partyTagOf = (subject: string) => subject.match(/\[IndbyAgent P-([0-9a-f]{8})\]/i)?.[1]?.toLowerCase() ?? null;
+
 // One inbox per party. Address is remembered on the party row.
 // If the AgentMail plan's inbox limit is hit, parties share AGENTMAIL_SHARED_INBOX
 // and inbound replies are routed by sender address + subject (see inbound.ts).
@@ -36,7 +40,7 @@ export async function ensureInbox(party: Party): Promise<string> {
 // lockedPolls: polls shown only after the guest RSVPs yes, so only counted here.
 export function inviteEmail(party: Party, guestName: string, url: string, datePolls: Poll[] = [], lockedPolls = 0) {
   const when = fmtWhen(party);
-  const subject = `You're invited: ${party.title}`;
+  const subject = `You're invited: ${party.title} ${partyTag(party.id)}`;
   const locked = lockedPolls;
   const text = [
     `Hi ${guestName},`,
