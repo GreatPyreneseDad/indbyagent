@@ -26,8 +26,8 @@ export async function areaMinutes(region: string, pairs: [string, string][], opt
     model: MODEL, max_tokens: 2000,
     system: "You estimate typical off-peak driving time in whole minutes between two neighborhoods or towns in a given region, for carpool pickup planning. Reply with JSON only: an array of integers, one per numbered pair, in order. Use your best estimate; never refuse.",
     messages: [{ role: "user", content: `Region: ${region}\n\n${missing.map(([, [a, b]], i) => `${i + 1}. ${a} -> ${b}`).join("\n")}` }],
-  }).catch((e) => { console.error("[builder/areas]", e instanceof Error ? e.message : e); return null; });
-  if (!msg) return { minutes: out, estimated: 0, warning: "area_estimate_unavailable" };
+  }).catch((e) => { console.error("[builder/areas]", e instanceof Error ? e.message : e); return String(e instanceof Error ? e.message : e).slice(0, 160); });
+  if (typeof msg === "string") return { minutes: out, estimated: 0, warning: "area_estimate_unavailable" };
   const text = msg.content.map((c) => (c.type === "text" ? c.text : "")).join("");
   let nums: unknown;
   try { nums = JSON.parse(text.slice(text.indexOf("["), text.lastIndexOf("]") + 1)); } catch { nums = null; }
