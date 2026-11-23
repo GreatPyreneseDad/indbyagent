@@ -28,7 +28,7 @@ export default function SessionCatch() {
       }
       if (ok) {
         window.history.replaceState(null, "", window.location.pathname);
-        if (window.location.pathname !== "/host") window.location.assign("/host"); else window.location.reload();
+        if (window.location.pathname === "/build" || window.location.pathname === "/host") window.location.reload(); else window.location.assign("/host");
       }
     })();
   }, []);
